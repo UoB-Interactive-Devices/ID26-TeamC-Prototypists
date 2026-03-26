@@ -3,13 +3,13 @@
 
 ServoDriver servo;
 
-// 채널 번호는 네 연결에 맞게 바꿔라
-const int SHOULDER_L   = 10;   // 좌측 페어
-const int SHOULDER_R   = 12;   // 우측 페어
-const int ELBOW_L      = 6;   // 좌측 페어
-const int ELBOW_R      = 3;   // 우측 페어
-const int WRIST_ROT    = 15;   // 일반 180도 서보
-const int WRIST_CR     = 9;   // 360도 continuous rotation 서보
+
+const int SHOULDER_L   = 10;   
+const int SHOULDER_R   = 12;  
+const int ELBOW_L      = 6;   
+const int ELBOW_R      = 3;   
+const int WRIST_ROT    = 15;   
+const int WRIST_CR     = 9;   
 
 const int CENTER = 90;
 const int DELTA  = 15;
@@ -21,15 +21,15 @@ void safeAngle(int ch, int angle) {
 }
 
 void stopContinuousServo(int ch) {
-  servo.setAngle(ch, 90);   // 대부분 90 근처가 정지
+  servo.setAngle(ch, 90);   
 }
 
 void rotateContinuousServoCW(int ch) {
-  servo.setAngle(ch, 120);  // 한 방향 회전
+  servo.setAngle(ch, 120);  
 }
 
 void rotateContinuousServoCCW(int ch) {
-  servo.setAngle(ch, 60);   // 반대 방향 회전
+  servo.setAngle(ch, 60);   
 }
 
 void centerAll180Servos() {
@@ -67,7 +67,7 @@ void testShoulderPair() {
 void testElbowPair() {
   Serial.println("Testing elbow pair");
 
-  // 네 요청대로 반대 방향 적용
+
   safeAngle(ELBOW_L, CENTER - DELTA);
   safeAngle(ELBOW_R, CENTER + DELTA);
   delay(1200);
