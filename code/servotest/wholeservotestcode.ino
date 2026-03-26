@@ -48,7 +48,7 @@ void stopAll() {
 void testShoulderPair() {
   Serial.println("Testing shoulder pair");
 
-  // 반대 방향 페어 테스트
+
   safeAngle(SHOULDER_L, CENTER - DELTA);
   safeAngle(SHOULDER_R, CENTER + DELTA);
   delay(1200);
