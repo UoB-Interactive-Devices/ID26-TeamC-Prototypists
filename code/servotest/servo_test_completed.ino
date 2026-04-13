@@ -3,7 +3,6 @@
 
 ServoDriver servo;
 
-// 채널 설정
 const int SHOULDER_L = 11;
 const int SHOULDER_R = 9;
 const int ELBOW      = 7;
@@ -11,17 +10,17 @@ const int WRIST      = 5;
 const int WRIST_ROT  = 3;
 const int GRIPPER    = 1;
 
-// 시작 각도
+
 const int CENTER = 90;
 
-// 각도 범위
+
 const int MIN_ANGLE = 0;
 const int MAX_ANGLE = 180;
 
-// 속도 조절값
+
 const int STEP_DELAY = 20;
 
-// 현재 각도 저장
+
 int shoulderLCurrent = CENTER;
 int shoulderRCurrent = CENTER;
 int elbowCurrent     = CENTER;
