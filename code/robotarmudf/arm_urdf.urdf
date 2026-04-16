@@ -1,0 +1,100 @@
+<robot name="robot_arm">
+ 	<link name="base_link">
+		<visual>
+		    <origin xyz="0 0 0.037" rpy="0 0 0"/>
+			<geometry>
+				<cylinder length="0.074" radius="0.075"/>
+			</geometry>
+		</visual>
+	</link>
+
+    <link name="base_rot">
+		<visual>
+            <origin xyz="0 0 0.012" rpy="0 0 0"/>
+          	<geometry>
+				<cylinder length="0.024" radius="0.075"/>
+			</geometry>
+		</visual>
+	</link>
+
+    <joint name="base_joint" type="revolute">
+      <parent link="base_link"/>
+      <child link="base_rot"/>
+      <origin xyz="0 0 0.074" rpy="0 0 0" />
+      <axis xyz="0 0 -1"/>
+    <limit lower="-3.14" upper="3.14" />
+    </joint>
+
+    <link name="arm1">
+        <!-- shoulder -->
+		<visual>
+          <origin xyz="0 0 0.1" rpy="0 0 0" />
+          	<geometry>
+            	<cylinder length="0.2" radius="0.022"/>
+			</geometry>
+		</visual>
+	</link>
+    <joint name="shoulder_joint" type="revolute">
+      <parent link="base_rot"/>
+      <child link="arm1"/>
+      <origin xyz="0 0 0.024" rpy="0 0 0" />
+      <axis xyz="1 0 0"/>
+      <limit lower="-1.57" upper="1.57" />
+    </joint>
+
+    <link name="arm2">
+        <!-- elbow -->
+		<visual>
+          <origin xyz="0 0 0.060" rpy="0 0 0" />
+          	<geometry>
+            	<cylinder length="0.120" radius="0.0175"/>
+			</geometry>
+		</visual>
+	</link>
+
+    <link name="wrist">
+		<visual>
+          <origin xyz="0 0 0.0425" rpy="0 0 0" />
+          	<geometry>
+            	<cylinder length="0.085" radius="0.0125"/>
+			</geometry>
+		</visual>
+    </link>
+
+    <link name="gripper">
+		<visual>
+          <origin xyz="0 0 0.0775" rpy="0 0 0" />
+          	<geometry>
+            	<box size="0.045 0.005 0.155" />
+			</geometry>
+		</visual>
+	</link>
+
+
+    <joint name="elbow_joint" type="revolute">
+      <parent link="arm1"/>
+      <child link="arm2"/>
+      <origin xyz="0 0 0.2" rpy="0 0 0" />
+      <axis xyz="1 0 0"/>
+        <limit lower="-1.92" upper="1.92" />
+    </joint>
+
+    <joint name="wrist_joint" type="revolute">
+      <parent link="arm2"/>
+      <child link="wrist"/>
+      <origin xyz="0 0 0.12" rpy="0 0 0" />
+      <axis xyz="-1 0 0"/>
+      <limit lower="-1.57" upper="2.8" />
+    </joint>
+
+    <joint name="wrist_rot_joint" type="revolute">
+      <parent link="wrist"/>
+      <child link="gripper"/>
+      <origin xyz="0 0 0.085" rpy="0 0 0" />
+      <axis xyz="0 0 -1"/>
+      <limit lower="-1.78" upper="0.48" />
+    </joint>
+
+
+
+</robot>
