@@ -39,7 +39,7 @@
       <child link="arm1"/>
       <origin xyz="0 0 0.024" rpy="0 0 0" />
       <axis xyz="1 0 0"/>
-      <limit lower="-1.57" upper="1.57" />
+      <limit lower="-1.40" upper="1.75" />
     </joint>
 
     <link name="arm2">
@@ -76,7 +76,7 @@
       <child link="arm2"/>
       <origin xyz="0 0 0.2" rpy="0 0 0" />
       <axis xyz="1 0 0"/>
-        <limit lower="-1.92" upper="1.92" />
+      <limit lower="-1.61" upper="1.54" />
     </joint>
 
     <joint name="wrist_joint" type="revolute">
@@ -84,7 +84,7 @@
       <child link="wrist"/>
       <origin xyz="0 0 0.12" rpy="0 0 0" />
       <axis xyz="-1 0 0"/>
-      <limit lower="-1.57" upper="2.8" />
+      <limit lower="-1.40" upper="1.75" />
     </joint>
 
     <joint name="wrist_rot_joint" type="revolute">
@@ -92,7 +92,7 @@
       <child link="gripper"/>
       <origin xyz="0 0 0.085" rpy="0 0 0" />
       <axis xyz="0 0 -1"/>
-      <limit lower="-1.78" upper="0.48" />
+      <limit lower="-1.57" upper="1.57" />
     </joint>
 
 
