@@ -7,7 +7,6 @@
 			</geometry>
 		</visual>
 	</link>
-
     <link name="base_rot">
 		<visual>
             <origin xyz="0 0 0.012" rpy="0 0 0"/>
@@ -16,7 +15,6 @@
 			</geometry>
 		</visual>
 	</link>
-
     <joint name="base_joint" type="revolute">
       <parent link="base_link"/>
       <child link="base_rot"/>
@@ -24,7 +22,6 @@
       <axis xyz="0 0 -1"/>
     <limit lower="-3.14" upper="3.14" />
     </joint>
-
     <link name="arm1">
         <!-- shoulder -->
 		<visual>
@@ -38,10 +35,9 @@
       <parent link="base_rot"/>
       <child link="arm1"/>
       <origin xyz="0 0 0.024" rpy="0 0 0" />
-      <axis xyz="1 0 0"/>
-      <limit lower="-1.40" upper="1.75" />
+      <axis xyz="0 1 0"/>
+      <limit lower="-1.57" upper="1.57" />
     </joint>
-
     <link name="arm2">
         <!-- elbow -->
 		<visual>
@@ -51,7 +47,6 @@
 			</geometry>
 		</visual>
 	</link>
-
     <link name="wrist">
 		<visual>
           <origin xyz="0 0 0.0425" rpy="0 0 0" />
@@ -60,7 +55,6 @@
 			</geometry>
 		</visual>
     </link>
-
     <link name="gripper">
 		<visual>
           <origin xyz="0 0 0.0775" rpy="0 0 0" />
@@ -70,31 +64,39 @@
 		</visual>
 	</link>
 
+    <!-- Logical endpoint representing the tip of the gripper.
+         No visual; used by IKPy as the end effector target. -->
+    <link name="tool_tip"/>
 
     <joint name="elbow_joint" type="revolute">
       <parent link="arm1"/>
       <child link="arm2"/>
       <origin xyz="0 0 0.2" rpy="0 0 0" />
-      <axis xyz="1 0 0"/>
-      <limit lower="-1.61" upper="1.54" />
+      <axis xyz="0 1 0"/>
+        <limit lower="-1.60" upper="1.53" />
     </joint>
-
     <joint name="wrist_joint" type="revolute">
       <parent link="arm2"/>
       <child link="wrist"/>
       <origin xyz="0 0 0.12" rpy="0 0 0" />
-      <axis xyz="-1 0 0"/>
-      <limit lower="-1.40" upper="1.75" />
+      <axis xyz="0 -1 0"/>
+      <limit lower="-1.57" upper="2.8" />
     </joint>
-
     <joint name="wrist_rot_joint" type="revolute">
       <parent link="wrist"/>
       <child link="gripper"/>
       <origin xyz="0 0 0.085" rpy="0 0 0" />
       <axis xyz="0 0 -1"/>
-      <limit lower="-1.57" upper="1.57" />
+      <limit lower="-1.78" upper="0.48" />
     </joint>
 
-
-
+    <!-- Fixed joint from the base of the gripper to its tip.
+         155mm is the full length of the gripper box.
+         Adjust this value if you want the 'target' to be at the
+         middle of the gripper jaws rather than the very tip. -->
+    <joint name="tool_joint" type="fixed">
+      <parent link="gripper"/>
+      <child link="tool_tip"/>
+      <origin xyz="0 0 0.155" rpy="0 0 0"/>
+    </joint>
 </robot>
