@@ -4,7 +4,7 @@
 - Primary TA: Wenda Zhao
 - Assistant TA: Yuan Liang
 
-<h2>Exploring How a Mobile Interactive Robotic Arm Changes Remote Interaction and Emotional Connection Between People and Their Cats-></h2>
+<h2>Exploring How a Mobile Interactive Robotic Arm Changes Remote Interaction and Emotional Connection Between People and Their Cats </h2>
 
 **Ideas**
 
