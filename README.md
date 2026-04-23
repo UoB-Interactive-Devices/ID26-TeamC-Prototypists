@@ -11,28 +11,29 @@ PERSONA ID:   P-01
 PERSONA NAME: [Fictional Full Name]
 DATA BASIS:   Based on [X] interviews / [X] survey responses
 
-━━━ DEMOGRAPHICS ━━━
+**DEMOGRAPHICS**
 Age:
 Gender:
 Occupation / Education:
 Location:
 Income Level (if applicable):
 
-━━━ BEHAVIORAL CHARACTERISTICS ━━━
+**BEHAVIORAL CHARACTERISTICS**
 Usage Context:
 Frequency of Use:
 Technology Proficiency:    [ ] Novice  [ ] Intermediate  [ ] Expert
 
-━━━ GOALS & MOTIVATIONS ━━━
+**GOALS & MOTIVATIONS**
 Primary Goal:
 Secondary Goal(s):
 
-━━━ PAIN POINTS & FRUSTRATIONS ━━━
+**PAIN POINTS & FRUSTRATIONS**
 Core Pain Points:
 Behavioral Barriers:
 
-━━━ REPRESENTATIVE QUOTE ━━━
+** REPRESENTATIVE QUOTE**
 "[Direct quote from actual interview data — cite as I-01, I-02…]"
+
 
 
 
