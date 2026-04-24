@@ -2,6 +2,7 @@
 #include "PCA9685.h"
 ServoDriver servo;
 
+// ========== SERVO CHANNELS ==========
 const int SHOULDER_L = 11;
 const int SHOULDER_R = 9;
 const int ELBOW      = 7;
@@ -9,11 +10,22 @@ const int WRIST      = 5;
 const int WRIST_ROT  = 3;
 const int GRIPPER    = 1;
 
+// ========== STEPPER PINS ==========
+const int DIR_PIN  = 2;
+const int STEP_PIN = 3;
+
+// ========== CONSTANTS ==========
 const int CENTER = 90;
 const int MIN_ANGLE = 0;
 const int MAX_ANGLE = 180;
-const int STEP_DELAY = 30;
+const int STEP_DELAY = 30;        // ms between servo degree increments
 
+// Stepper: NEMA 17 standard is 200 full steps per revolution (1.8°/step).
+// A4988 in full-step mode (MS pins floating) = 200 steps for 360° of rotation.
+const int STEPPER_STEPS_PER_REV = 800;
+const int STEPPER_PULSE_US = 2000; // delay between HIGH/LOW transitions
+
+// ========== STATE TRACKING ==========
 int shoulderLCurrent = CENTER;
 int shoulderRCurrent = CENTER;
 int elbowCurrent     = CENTER;
@@ -21,11 +33,58 @@ int wristCurrent     = CENTER;
 int wristRotCurrent  = CENTER;
 int gripperCurrent   = CENTER;
 
+// Stepper tracks its position in "steps from the starting orientation"
+// Positive = CW as viewed from above, Negative = CCW
+long baseStepsCurrent = 0;
+
+// ========== HELPERS ==========
 void clampAngle(int &angle) {
   if (angle < MIN_ANGLE) angle = MIN_ANGLE;
   if (angle > MAX_ANGLE) angle = MAX_ANGLE;
 }
 
+// Convert a signed angle (degrees) into a signed step count.
+// +angle = CW rotation, -angle = CCW rotation.
+long angleToSteps(float angleDegrees) {
+  return (long)(angleDegrees * STEPPER_STEPS_PER_REV / 360.0);
+}
+
+// Drive the stepper by a signed number of steps.
+// Positive = CW (DIR HIGH), Negative = CCW (DIR LOW).
+void stepBase(long steps) {
+  if (steps == 0) return;
+
+  if (steps > 0) {
+    digitalWrite(DIR_PIN, HIGH);
+  } else {
+    digitalWrite(DIR_PIN, LOW);
+    steps = -steps;
+  }
+
+  for (long i = 0; i < steps; i++) {
+    digitalWrite(STEP_PIN, HIGH);
+    delayMicroseconds(STEPPER_PULSE_US);
+    digitalWrite(STEP_PIN, LOW);
+    delayMicroseconds(STEPPER_PULSE_US);
+  }
+}
+
+// Move the base to a target angle in degrees (relative to startup orientation).
+// Computes the shortest step delta from where the base currently is.
+void moveBaseToAngle(float targetAngleDegrees) {
+  long targetSteps = angleToSteps(targetAngleDegrees);
+  long deltaSteps = targetSteps - baseStepsCurrent;
+  stepBase(deltaSteps);
+  baseStepsCurrent = targetSteps;
+
+  Serial.print("Base: ");
+  Serial.print(targetAngleDegrees);
+  Serial.print("°  (");
+  Serial.print(baseStepsCurrent);
+  Serial.println(" steps)");
+}
+
+// ========== SERVO MOTION HELPERS ==========
 void moveServoSlow(int ch, int &currentAngle, int targetAngle) {
   clampAngle(targetAngle);
   if (currentAngle < targetAngle) {
@@ -87,6 +146,11 @@ void setGripper(int angle) {
 
 void printStatus() {
   Serial.println("------ CURRENT ANGLES ------");
+  Serial.print("  Base (steps): ");
+  Serial.print(baseStepsCurrent);
+  Serial.print("  (~");
+  Serial.print(baseStepsCurrent * 360.0 / STEPPER_STEPS_PER_REV);
+  Serial.println("°)");
   Serial.print("  Shoulder L: ");
   Serial.print(shoulderLCurrent);
   Serial.print("  R: ");
@@ -102,9 +166,8 @@ void printStatus() {
   Serial.println("----------------------------");
 }
 
-// Coordinated move: drives all 5 joints toward their targets simultaneously,
-// stepping 1 degree at a time. Much smoother than setting each joint in sequence.
-void moveAllJoints(int sTarget, int eTarget, int wTarget, int rTarget, int gTarget) {
+// Coordinated servo move (base stepper is handled separately before or after)
+void moveAllServos(int sTarget, int eTarget, int wTarget, int rTarget, int gTarget) {
   clampAngle(sTarget);
   clampAngle(eTarget);
   clampAngle(wTarget);
@@ -149,9 +212,17 @@ void moveAllJoints(int sTarget, int eTarget, int wTarget, int rTarget, int gTarg
   }
 }
 
+// ========== SETUP / PRESETS ==========
 void setup() {
   Wire.begin();
   Serial.begin(9600);
+
+  // Stepper pins
+  pinMode(DIR_PIN, OUTPUT);
+  pinMode(STEP_PIN, OUTPUT);
+  digitalWrite(DIR_PIN, LOW);
+  digitalWrite(STEP_PIN, LOW);
+
   servo.init(0x7f);
   delay(500);
   servo.setAngle(SHOULDER_L, 90);
@@ -162,15 +233,19 @@ void setup() {
   setShoulders(90);
   setElbow(90);
   setWrist(90);
+
   Serial.println();
-  Serial.println("===== JOINT TEST =====");
+  Serial.println("===== ROBOT ARM =====");
   Serial.println("Commands:");
   Serial.println("  s <angle>   Shoulder");
   Serial.println("  e <angle>   Elbow");
   Serial.println("  w <angle>   Wrist");
   Serial.println("  r <angle>   Wrist Rotation");
   Serial.println("  g <angle>   Gripper");
-  Serial.println("  ik s e w r g   All joints (degrees, 0-180)");
+  Serial.println("  b <angle>   Base rotation (degrees from home)");
+  Serial.println("  b_raw <steps> Base rotation (raw step count)");
+  Serial.println("  b_home      Reset base step counter to 0 (without moving)");
+  Serial.println("  ik b s e w r g   All joints including base");
   Serial.println("  pick up     Preset pick pose");
   Serial.println("  place       Preset place pose");
   Serial.println("  status      Print all angles");
@@ -196,6 +271,7 @@ void PLACE() {
   servo.setAngle(GRIPPER, 180);
 }
 
+// ========== MAIN LOOP ==========
 void loop() {
   if (Serial.available()) {
     String input = Serial.readStringUntil('\n');
@@ -206,9 +282,28 @@ void loop() {
     if (lower == "status") {
       printStatus();
     }
+    else if (lower == "b_home") {
+      baseStepsCurrent = 0;
+      Serial.println("Base home position reset to 0 (no movement performed).");
+    }
+    else if (lower.startsWith("b_raw ")) {
+      // Direct step count: "b_raw 50" moves 50 steps CW, "b_raw -50" moves CCW
+      long steps = input.substring(6).toInt();
+      stepBase(steps);
+      baseStepsCurrent += steps;
+      Serial.print("Base moved by raw steps: ");
+      Serial.println(steps);
+    }
+    else if (lower.startsWith("b ")) {
+      // Angle-based: "b 45" moves base to +45° from home
+      float angle = input.substring(2).toFloat();
+      moveBaseToAngle(angle);
+    }
     else if (lower.startsWith("ik ")) {
-      // Format: "ik shoulder elbow wrist wristrot gripper"
-      // Example: "ik 90 45 120 90 0"
+      // Format: "ik base shoulder elbow wrist wristrot gripper"
+      // Example: "ik 0 90 45 120 90 0"
+      // Base is in degrees (float, can be signed)
+      // Servo joints are 0-180 integers
       String data = input.substring(3);
       data.trim();
 
@@ -216,26 +311,33 @@ void loop() {
       int idx2 = data.indexOf(' ', idx1 + 1);
       int idx3 = data.indexOf(' ', idx2 + 1);
       int idx4 = data.indexOf(' ', idx3 + 1);
+      int idx5 = data.indexOf(' ', idx4 + 1);
 
-      if (idx1 == -1 || idx2 == -1 || idx3 == -1 || idx4 == -1) {
-        Serial.println("Bad IK format. Need: ik s e w r g");
+      if (idx1 == -1 || idx2 == -1 || idx3 == -1 || idx4 == -1 || idx5 == -1) {
+        Serial.println("Bad IK format. Need: ik b s e w r g");
         return;
       }
 
-      int s = data.substring(0, idx1).toInt();
-      int e = data.substring(idx1 + 1, idx2).toInt();
-      int w = data.substring(idx2 + 1, idx3).toInt();
-      int r = data.substring(idx3 + 1, idx4).toInt();
-      int g = data.substring(idx4 + 1).toInt();
+      float b = data.substring(0, idx1).toFloat();
+      int   s = data.substring(idx1 + 1, idx2).toInt();
+      int   e = data.substring(idx2 + 1, idx3).toInt();
+      int   w = data.substring(idx3 + 1, idx4).toInt();
+      int   r = data.substring(idx4 + 1, idx5).toInt();
+      int   g = data.substring(idx5 + 1).toInt();
 
-      Serial.print("IK received: s=");
+      Serial.print("IK received: b=");
+      Serial.print(b); Serial.print("° s=");
       Serial.print(s); Serial.print(" e=");
       Serial.print(e); Serial.print(" w=");
       Serial.print(w); Serial.print(" r=");
       Serial.print(r); Serial.print(" g=");
       Serial.println(g);
 
-      moveAllJoints(s, e, w, r, g);
+      // Move the base first (stepper rotation), then the servos.
+      // Doing base first means the rest of the arm swings into its new vertical
+      // plane before the shoulder/elbow/wrist adjust to the final pose.
+      moveBaseToAngle(b);
+      moveAllServos(s, e, w, r, g);
       Serial.println("IK move done");
     }
     else if (lower.startsWith("s ")) {
@@ -265,7 +367,7 @@ void loop() {
       PLACE();
     }
     else {
-      Serial.println("Unknown. Use: s/e/w/r/g <angle>, ik s e w r g, pick up, place, status");
+      Serial.println("Unknown. Use: s/e/w/r/g/b <angle>, ik b s e w r g, pick up, place, status");
     }
   }
 }
