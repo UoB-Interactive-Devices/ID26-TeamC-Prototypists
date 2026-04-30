@@ -91,28 +91,40 @@ python -m control.agent_api --input '{"action":"home"}'
 python -m control.agent_api --input '{"action":"run","name":"ready"}'
 python -m control.agent_api --input '{"action":"move","joint":"shoulder","angle":95}'
 python -m control.agent_api --input '{"action":"auto_blue_on"}'
-python -m control.agent_api --input '{"action":"webcam_control","mode":"palette","duration":30}'
+python -m control.agent_api --input '{"action":"detect"}'
 ```
 
 This is the recommended interface for OpenClaw because it returns structured JSON.
 
-## Webcam Control
+## Camera And YOLO Detection
 
-The PC can use a USB webcam as OpenClaw's eyes:
+The PC can use a USB webcam as OpenClaw's eyes. Start the shared camera
+stream with the trained YOLO model:
 
 ```bash
-python -m control.cli --port /dev/cu.usbmodem1101 webcam --mode palette
-python -m control.cli --port /dev/cu.usbmodem1101 webcam --mode track --colors blue
+python -m control.cli stream \
+  --camera external \
+  --model yolo11n.pt \
+  --conf 0.4 \
+  --width 640 \
+  --height 480 \
+  --fps 15
 ```
 
-`palette` maps colored cards/objects to commands:
+Open these endpoints from a browser or agent:
 
-- blue: pickup
-- green: place
-- yellow: home
-- red: stop
+- `/stream`: raw live camera feed
+- `/annotated_stream`: live camera feed with YOLO boxes
+- `/detect`: one-shot JSON detection result
 
-`track` follows one selected color and picks it up when it fills enough of the frame.
+You can also run detection directly from the command line:
+
+```bash
+python -m control.yolo_webcam_detect --model yolo11n.pt --camera external --conf 0.4
+python -m control.yolo_webcam_detect --model yolo11n.pt --camera external --once --no-show
+```
+
+Use the YOLO detector and `/detect` endpoint when OpenClaw needs vision input.
 
 ## Important Note
 
