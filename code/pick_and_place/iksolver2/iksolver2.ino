@@ -11,6 +11,13 @@ const int CENTER = 90;
 const int MIN_ANGLE = 0;
 const int MAX_ANGLE = 180;
 const int STEP_DELAY = 30;
+const int PICKUP_SHOULDER_ANGLE = 50;
+const int PICKUP_ELBOW_ANGLE = 40;
+const int PICKUP_WRIST_ANGLE = 130;
+const int PICKUP_OPEN_GRIP_ANGLE = 180;
+const int PICKUP_CLOSE_GRIP_ANGLE = 0;
+const int PICKUP2_BASE_ANGLE = 90;
+
 int shoulderLCurrent = CENTER;
 int shoulderRCurrent = CENTER;
 int elbowCurrent     = CENTER;
@@ -111,27 +118,27 @@ void setup() {
   Serial.println("  w <angle>   Wrist");
   Serial.println("  r <angle>   Wrist Rotation");
   Serial.println("  g <angle>   Gripper");
+  Serial.println("  pickup1     Pick up while keeping current shoulder angle");
+  Serial.println("  pickup2     Pick up at the configured shoulder angle");
   Serial.println("  status      Print all angles");
   Serial.println("======================");
 }
 
-void PICKUP() {
-  servo.setAngle(GRIPPER, 180);
-  servo.setAngle(SHOULDER_L, 50);
-  servo.setAngle(SHOULDER_R, 130);
-  servo.setAngle(ELBOW, 40);
-  servo.setAngle(WRIST, 130);
-  Serial.print("picking up pose: ");
-  servo.setAngle(GRIPPER, 0);
+void doPickupAtShoulder(int leftShoulderAngle) {
+  setGripper(PICKUP_OPEN_GRIP_ANGLE);
+  setShoulders(leftShoulderAngle);
+  setElbow(PICKUP_ELBOW_ANGLE);
+  setWrist(PICKUP_WRIST_ANGLE);
+  setGripper(PICKUP_CLOSE_GRIP_ANGLE);
+  Serial.println("pickup complete");
 }
 
-void PLACE() {
-  servo.setAngle(SHOULDER_L, 130);
-  servo.setAngle(SHOULDER_R, 50);
-  servo.setAngle(ELBOW, 140);
-  servo.setAngle(WRIST, 50);
-  Serial.print("placing  pose: ");
-  servo.setAngle(GRIPPER, 180);
+void PICKUP1() {
+  doPickupAtShoulder(shoulderLCurrent);
+}
+
+void PICKUP2() {
+  doPickupAtShoulder(PICKUP2_BASE_ANGLE);
 }
 
 void loop() {
@@ -165,16 +172,21 @@ void loop() {
       setGripper(angle);
     }
 
-    else if (lower.startsWith("pick up")) {
-      PICKUP();
+    else if (lower == "pickup1" || lower == "pick up 1" || lower == "pick up1") {
+      PICKUP1();
     }
-
+    else if (lower == "pickup2" || lower == "pick up 2" || lower == "pick up2") {
+      PICKUP2();
+    }
+    else if (lower == "pickup" || lower == "pick up") {
+      PICKUP1();
+    }
     else if (lower.startsWith("place")) {
-      PICKUP();
+      Serial.println("place commands are disabled in this sketch");
     }
     
     else {
-      Serial.println("Unknown. Use: s/e/w/r/g <angle> or status");
+      Serial.println("Unknown. Use: s/e/w/r/g <angle>, pickup1, pickup2, or status");
     }
   }
 }
