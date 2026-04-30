@@ -1,92 +1,91 @@
 #include <Wire.h>
-#include "PCA9685.h"
-#include <Pixy2.h>
+#include <Adafruit_PWMServoDriver.h>
+#include <EEPROM.h>
 
-ServoDriver servo;
-Pixy2 pixy;
+const unsigned long SERIAL_BAUD = 115200;
+const byte PCA9685_ADDRESS = 0x40;
+const int SERVO_FREQ_HZ = 50;
+const int SERVO_MIN_US = 600;
+const int SERVO_MAX_US = 2400;
+const int SHOULDER_LEFT_CHANNEL = 9;
+const int SHOULDER_RIGHT_CHANNEL = 11;
+const int SHOULDER_SERVO_MIN_PULSE = 150;
+const int SHOULDER_SERVO_MAX_PULSE = 600;
 
-const int SHOULDER_L = 11;
-const int SHOULDER_R = 9;
-const int ELBOW = 7;
-const int WRIST = 5;
-const int WRIST_ROTATION = 3;
-const int GRIP = 1;
+Adafruit_PWMServoDriver pwm = Adafruit_PWMServoDriver(PCA9685_ADDRESS);
+
+const byte EEPROM_MAGIC = 0x43;
+const int EEPROM_MAGIC_ADDR = 0;
+const int EEPROM_JOINTS_ADDR = 1;
 
 const int STEPPER_STEP_PIN = 3;
 const int STEPPER_DIR_PIN = 2;
 const int STEPPER_ENABLE_PIN = 4;
+const unsigned int STEPPER_PULSE_US = 3000;
+const int STEPPER_STEPS_PER_DEGREE = 3.1;
+const bool STEPPER_HOLD_AFTER_MOVE = false;
 
-const unsigned long SERIAL_BAUD = 115200;
+const int SERVO_MIN_ANGLE = 0;
+const int SERVO_MAX_ANGLE = 180;
+const int SHOULDER_MIN_SAFE_ANGLE = 0;
+const int SHOULDER_MAX_SAFE_ANGLE = 180;
+const int MACRO_STEP_DELAY_MS = 18;
+const unsigned long SERVO_MOTION_INTERVAL_MS = 25;
+const unsigned long SHOULDER_MOTION_INTERVAL_MS = 55;
+const unsigned long PICKUP_FLOOR_SETTLE_MS = 1200;
+const unsigned long CARRY_SETTLE_MS = 500;
 
-const int SHOULDER_MIN = 45;
-const int SHOULDER_MAX = 135;
-const int ELBOW_MIN = 40;
-const int ELBOW_MAX = 150;
-const int WRIST_MIN = 30;
-const int WRIST_MAX = 150;
-const int WRIST_ROTATION_MIN = 0;
-const int WRIST_ROTATION_MAX = 180;
-const int GRIP_MIN = 20;
-const int GRIP_MAX = 120;
-const int ROTATE_MIN = 60;
-const int ROTATE_MAX = 120;
+struct JointConfig {
+  const char* name;
+  byte channel;
+  int minimum;
+  int maximum;
+  int home;
+  int value;
+  bool inverted;
+  int offset;
+};
 
-const int HOME_SHOULDER = 90;
-const int HOME_ELBOW = 90;
-const int HOME_WRIST = 90;
-const int HOME_WRIST_ROTATION = 90;
-const int HOME_GRIP = 90;
+enum JointIndex {
+  JOINT_SHOULDER_L = 0,
+  JOINT_SHOULDER_R,
+  JOINT_WRIST,
+  JOINT_WRIST_ROTATION,
+  JOINT_GRIP,
+  JOINT_COUNT
+};
+
+JointConfig joints[JOINT_COUNT] = {
+  {"shoulder_l", SHOULDER_LEFT_CHANNEL, SHOULDER_MIN_SAFE_ANGLE, SHOULDER_MAX_SAFE_ANGLE, 0, 0, false, 0},
+  {"shoulder_r", SHOULDER_RIGHT_CHANNEL, SHOULDER_MIN_SAFE_ANGLE, SHOULDER_MAX_SAFE_ANGLE, 0, 0, false, 0},
+  {"wrist", 5, 0, 180, 120, 120, false, 0},
+  {"wrist_rotation", 3, 0, 180, 90, 90, false, 0},
+  {"grip", 1, 0, 180, 90, 90, false, 0},
+};
+
 const int HOME_ROTATE = 90;
-const int PICKUP_OPEN_GRIP = 180;
-const int PICKUP_CLOSE_GRIP = 5;
-const int PICKUP_SHOULDER = 50;
-const int PICKUP_ELBOW = 40;
-const int PICKUP_WRIST = 130;
-const int PLACE_SHOULDER = 50;
-const int PLACE_ELBOW = 40;
+const int PICKUP_OPEN_GRIP = 160;
+const int PICKUP_CLOSE_GRIP = 3;
+const int PICKUP_SHOULDER = 150;
+const int PICKUP_WRIST = 140;
+const int PICKUP_SHAKE_LEFT = 25;
+const int PICKUP_SHAKE_RIGHT = 155;
+const int PICKUP_SHAKE_CENTER = 90;
+const int PICKUP_SHAKE_REPEAT = 2;
+const int CARRY_SHOULDER = 60;
+const int CARRY_WRIST = 170;
+const int PLACE_SHOULDER = 60;
 const int PLACE_WRIST = 130;
 const int PLACE_OPEN_GRIP = 180;
-const int MACRO_STEP_DELAY_MS = 20;
-const uint8_t BLUE_SIGNATURE = 1;
-const int PIXY_CENTER_X = 158;
-const int PIXY_TOLERANCE_X = 18;
-const int PIXY_CLOSE_WIDTH = 55;
-const int AUTO_ROTATE_STEP = 2;
-const int AUTO_ARM_STEP = 2;
-const unsigned long AUTO_LOOP_INTERVAL_MS = 180;
-const unsigned long SEARCH_SPIN_INTERVAL_MS = 500;
-const int NOD_ELBOW_DELTA = 8;
-const int NOD_WRIST_DELTA = 8;
-const unsigned long NOD_COOLDOWN_MS = 1800;
-const unsigned int STEPPER_PULSE_US = 700;
-const int STEPPER_MAX_STEPS_PER_COMMAND = 5000;
-const int STEPPER_STEPS_PER_DEGREE = 9;
-const bool STEPPER_HOLD_AFTER_MOVE = true;
+const int FEED_BASE_DELTA = 45;
 
 String inputLine = "";
-
-int shoulderAngle = HOME_SHOULDER;
-int elbowAngle = HOME_ELBOW;
-int wristAngle = HOME_WRIST;
-int wristRotationAngle = HOME_WRIST_ROTATION;
-int gripAngle = HOME_GRIP;
 int rotateAngle = HOME_ROTATE;
-bool autoBlueEnabled = false;
-bool blueNodEnabled = false;
-bool autoPickupDone = false;
-bool pixyInitialized = false;
 bool stepperEnabled = false;
-unsigned long lastAutoStepMs = 0;
-unsigned long lastSearchSpinMs = 0;
-unsigned long lastBlueNodMs = 0;
-
-struct BlueTarget {
-  bool found;
-  int x;
-  int y;
-  int width;
-  int height;
-};
+int jointTargets[JOINT_COUNT];
+bool motionEnabled = true;
+unsigned long lastServoMotionMs = 0;
+unsigned long lastShoulderMotionMs = 0;
 
 int clampInt(int value, int minimumValue, int maximumValue) {
   if (value < minimumValue) return minimumValue;
@@ -94,30 +93,185 @@ int clampInt(int value, int minimumValue, int maximumValue) {
   return value;
 }
 
+int physicalAngle(const JointConfig& joint, int logicalAngle) {
+  int angle = joint.inverted ? (180 - logicalAngle) : logicalAngle;
+  return clampInt(angle + joint.offset, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
+}
+
+int angleToMicroseconds(int angle) {
+  int safeAngle = clampInt(angle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
+  return map(safeAngle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE, SERVO_MIN_US, SERVO_MAX_US);
+}
+
+int shoulderAngleToPulse(int angle) {
+  int safeAngle = clampInt(angle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
+  return map(safeAngle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE, SHOULDER_SERVO_MIN_PULSE, SHOULDER_SERVO_MAX_PULSE);
+}
+
+void writeServoAngle(byte channel, int angle) {
+  byte safeChannel = (byte)clampInt(channel, 0, 15);
+  pwm.writeMicroseconds(safeChannel, angleToMicroseconds(angle));
+}
+
+void writeShoulders(int angle) {
+  int leftAngle = clampInt(angle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
+  int rightAngle = clampInt(180 - angle, SERVO_MIN_ANGLE, SERVO_MAX_ANGLE);
+
+  pwm.setPWM(joints[JOINT_SHOULDER_L].channel, 0, shoulderAngleToPulse(leftAngle));
+  pwm.setPWM(joints[JOINT_SHOULDER_R].channel, 0, shoulderAngleToPulse(rightAngle));
+
+  joints[JOINT_SHOULDER_L].value = leftAngle;
+  joints[JOINT_SHOULDER_R].value = leftAngle;
+}
+
+void writeJointIndex(byte index, int angle) {
+  if (index == JOINT_SHOULDER_L || index == JOINT_SHOULDER_R) {
+    writeShoulders(angle);
+    return;
+  }
+
+  JointConfig& joint = joints[index];
+  joint.value = clampInt(angle, joint.minimum, joint.maximum);
+  writeServoAngle(joint.channel, physicalAngle(joint, joint.value));
+}
+
+void syncTargetsToCurrent() {
+  for (byte i = 0; i < JOINT_COUNT; i++) {
+    jointTargets[i] = joints[i].value;
+  }
+}
+
+void savePersistentState() {
+  EEPROM.update(EEPROM_MAGIC_ADDR, EEPROM_MAGIC);
+  for (byte i = 0; i < JOINT_COUNT; i++) {
+    EEPROM.update(EEPROM_JOINTS_ADDR + i, (byte)clampInt(jointTargets[i], 0, 180));
+  }
+}
+
+void loadPersistentState() {
+  if (EEPROM.read(EEPROM_MAGIC_ADDR) != EEPROM_MAGIC) {
+    syncTargetsToCurrent();
+    savePersistentState();
+    return;
+  }
+
+  for (byte i = 0; i < JOINT_COUNT; i++) {
+    int saved = EEPROM.read(EEPROM_JOINTS_ADDR + i);
+    joints[i].value = clampInt(saved, joints[i].minimum, joints[i].maximum);
+  }
+  rotateAngle = HOME_ROTATE;
+  syncTargetsToCurrent();
+}
+
+void setJointTargetIndex(byte index, int angle) {
+  jointTargets[index] = clampInt(angle, joints[index].minimum, joints[index].maximum);
+  motionEnabled = true;
+  savePersistentState();
+}
+
+void setShoulderTarget(int angle) {
+  int safeAngle = clampInt(angle, joints[JOINT_SHOULDER_L].minimum, joints[JOINT_SHOULDER_L].maximum);
+  jointTargets[JOINT_SHOULDER_L] = safeAngle;
+  jointTargets[JOINT_SHOULDER_R] = safeAngle;
+  motionEnabled = true;
+  savePersistentState();
+}
+
+bool servoMotionActive() {
+  for (byte i = 0; i < JOINT_COUNT; i++) {
+    if (joints[i].value != jointTargets[i]) {
+      return true;
+    }
+  }
+  return false;
+}
+
+bool shoulderMotionActive() {
+  return joints[JOINT_SHOULDER_L].value != jointTargets[JOINT_SHOULDER_L];
+}
+
+void updateServoMotion() {
+  if (!motionEnabled) return;
+
+  unsigned long now = millis();
+  bool canMoveServo = now - lastServoMotionMs >= SERVO_MOTION_INTERVAL_MS;
+  bool canMoveShoulder = now - lastShoulderMotionMs >= SHOULDER_MOTION_INTERVAL_MS;
+  if (!canMoveServo && !canMoveShoulder) {
+    return;
+  }
+
+  bool movedServo = false;
+  bool shoulderActive = shoulderMotionActive();
+  for (byte i = 0; i < JOINT_COUNT; i++) {
+    if (joints[i].value == jointTargets[i]) {
+      continue;
+    }
+
+    if (i == JOINT_SHOULDER_R) {
+      continue;
+    }
+
+    if (i == JOINT_SHOULDER_L) {
+      if (!canMoveShoulder) {
+        continue;
+      }
+      int nextValue = joints[i].value + (joints[i].value < jointTargets[i] ? 1 : -1);
+      writeJointIndex(i, nextValue);
+      lastShoulderMotionMs = now;
+      continue;
+    }
+
+    if (shoulderActive) {
+      continue;
+    }
+
+    if (!canMoveServo) {
+      continue;
+    }
+    int nextValue = joints[i].value + (joints[i].value < jointTargets[i] ? 1 : -1);
+    writeJointIndex(i, nextValue);
+    movedServo = true;
+  }
+
+  if (movedServo) {
+    lastServoMotionMs = now;
+  }
+}
+
+void stopServoMotion() {
+  syncTargetsToCurrent();
+  motionEnabled = false;
+  savePersistentState();
+}
+
+void waitForServoMotion() {
+  while (servoMotionActive()) {
+    updateServoMotion();
+  }
+}
+
+void writeRawChannel(byte channel, int angle) {
+  writeServoAngle(channel, angle);
+}
+
+int findJointIndex(const String& rawName) {
+  String name = rawName;
+  name.trim();
+  name.toLowerCase();
+  if (name == "shoulder") return JOINT_SHOULDER_L;
+  if (name == "shoulder_l" || name == "left_shoulder") return JOINT_SHOULDER_L;
+  if (name == "shoulder_r" || name == "right_shoulder") return JOINT_SHOULDER_R;
+  if (name == "wrist") return JOINT_WRIST;
+  if (name == "wrist_rotation" || name == "wrist_rotate") return JOINT_WRIST_ROTATION;
+  if (name == "grip" || name == "gripper") return JOINT_GRIP;
+  return -1;
+}
+
 void applyShoulder(int angle) {
-  shoulderAngle = clampInt(angle, SHOULDER_MIN, SHOULDER_MAX);
-  servo.setAngle(SHOULDER_L, shoulderAngle);
-  servo.setAngle(SHOULDER_R, 180 - shoulderAngle);
-}
-
-void applyElbow(int angle) {
-  elbowAngle = clampInt(angle, ELBOW_MIN, ELBOW_MAX);
-  servo.setAngle(ELBOW, elbowAngle);
-}
-
-void applyWrist(int angle) {
-  wristAngle = clampInt(angle, WRIST_MIN, WRIST_MAX);
-  servo.setAngle(WRIST, wristAngle);
-}
-
-void applyWristRotation(int angle) {
-  wristRotationAngle = clampInt(angle, WRIST_ROTATION_MIN, WRIST_ROTATION_MAX);
-  servo.setAngle(WRIST_ROTATION, wristRotationAngle);
-}
-
-void applyGrip(int angle) {
-  gripAngle = clampInt(angle, GRIP_MIN, GRIP_MAX);
-  servo.setAngle(GRIP, gripAngle);
+  int safeAngle = clampInt(angle, joints[JOINT_SHOULDER_L].minimum, joints[JOINT_SHOULDER_L].maximum);
+  writeJointIndex(JOINT_SHOULDER_L, safeAngle);
+  writeJointIndex(JOINT_SHOULDER_R, safeAngle);
+  setShoulderTarget(safeAngle);
 }
 
 void setStepperEnabled(bool enabled) {
@@ -125,11 +279,8 @@ void setStepperEnabled(bool enabled) {
   digitalWrite(STEPPER_ENABLE_PIN, enabled ? LOW : HIGH);
 }
 
-void moveStepper(int steps) {
-  int clampedSteps = clampInt(steps, -STEPPER_MAX_STEPS_PER_COMMAND, STEPPER_MAX_STEPS_PER_COMMAND);
-  if (clampedSteps == 0) {
-    return;
-  }
+void moveStepper(long steps) {
+  if (steps == 0) return;
 
   bool wasEnabled = stepperEnabled;
   if (!wasEnabled) {
@@ -137,9 +288,9 @@ void moveStepper(int steps) {
     delay(2);
   }
 
-  digitalWrite(STEPPER_DIR_PIN, clampedSteps >= 0 ? HIGH : LOW);
-  int pulseCount = abs(clampedSteps);
-  for (int i = 0; i < pulseCount; i++) {
+  digitalWrite(STEPPER_DIR_PIN, steps >= 0 ? HIGH : LOW);
+  unsigned long pulseCount = labs(steps);
+  for (unsigned long i = 0; i < pulseCount; i++) {
     digitalWrite(STEPPER_STEP_PIN, HIGH);
     delayMicroseconds(STEPPER_PULSE_US);
     digitalWrite(STEPPER_STEP_PIN, LOW);
@@ -152,342 +303,126 @@ void moveStepper(int steps) {
 }
 
 void applyRotateRaw(int angle) {
-  int targetAngle = clampInt(angle, ROTATE_MIN, ROTATE_MAX);
-  int deltaAngle = targetAngle - rotateAngle;
+  int deltaAngle = angle - rotateAngle;
   moveStepper(deltaAngle * STEPPER_STEPS_PER_DEGREE);
-  rotateAngle = targetAngle;
+  rotateAngle = angle;
+  savePersistentState();
 }
 
-void stopRotate() {
-  digitalWrite(STEPPER_STEP_PIN, LOW);
+void moveLogicalJointSlow(byte index, int targetValue) {
+  setJointTargetIndex(index, targetValue);
+  waitForServoMotion();
 }
 
-void nudgeRotateLeft() {
-  applyRotateRaw(rotateAngle - AUTO_ROTATE_STEP);
+void moveShoulderSlow(int targetValue) {
+  setShoulderTarget(targetValue);
+  waitForServoMotion();
 }
 
-void nudgeRotateRight() {
-  applyRotateRaw(rotateAngle + AUTO_ROTATE_STEP);
-}
-
-void nudgeArmDown() {
-  applyShoulder(shoulderAngle + AUTO_ARM_STEP);
-  applyElbow(elbowAngle + AUTO_ARM_STEP);
-  applyWrist(wristAngle - AUTO_ARM_STEP);
-}
-
-void homeAll() {
-  applyShoulder(HOME_SHOULDER);
-  applyElbow(HOME_ELBOW);
-  applyWrist(HOME_WRIST);
-  applyWristRotation(HOME_WRIST_ROTATION);
-  applyGrip(HOME_GRIP);
-  applyRotateRaw(HOME_ROTATE);
-}
-
-void moveJointSlow(int currentValue, int targetValue, void (*applyFn)(int), int minValue, int maxValue) {
-  int clampedTarget = clampInt(targetValue, minValue, maxValue);
-  while (currentValue != clampedTarget) {
-    if (currentValue < clampedTarget) {
-      currentValue++;
-    } else {
-      currentValue--;
-    }
-    applyFn(currentValue);
+void moveRotateSlow(int targetValue) {
+  while (rotateAngle != targetValue) {
+    int nextValue = rotateAngle + (rotateAngle < targetValue ? 1 : -1);
+    applyRotateRaw(nextValue);
     delay(MACRO_STEP_DELAY_MS);
   }
 }
 
-void homeAllSlow() {
-  moveJointSlow(gripAngle, HOME_GRIP, applyGrip, GRIP_MIN, GRIP_MAX);
-  delay(150);
-  moveJointSlow(wristAngle, HOME_WRIST, applyWrist, WRIST_MIN, WRIST_MAX);
-  delay(150);
-  moveJointSlow(
-    wristRotationAngle,
-    HOME_WRIST_ROTATION,
-    applyWristRotation,
-    WRIST_ROTATION_MIN,
-    WRIST_ROTATION_MAX
-  );
-  delay(150);
-  moveJointSlow(elbowAngle, HOME_ELBOW, applyElbow, ELBOW_MIN, ELBOW_MAX);
-  delay(150);
-  moveJointSlow(shoulderAngle, HOME_SHOULDER, applyShoulder, SHOULDER_MIN, SHOULDER_MAX);
-  delay(150);
-  moveJointSlow(rotateAngle, HOME_ROTATE, applyRotateRaw, ROTATE_MIN, ROTATE_MAX);
+void homeAll(bool slow) {
+  if (slow) {
+    setJointTargetIndex(JOINT_GRIP, joints[JOINT_GRIP].home);
+    setJointTargetIndex(JOINT_WRIST, joints[JOINT_WRIST].home);
+    setJointTargetIndex(JOINT_WRIST_ROTATION, joints[JOINT_WRIST_ROTATION].home);
+    setShoulderTarget(joints[JOINT_SHOULDER_L].home);
+    waitForServoMotion();
+    moveRotateSlow(HOME_ROTATE);
+    return;
+  }
+
+  writeJointIndex(JOINT_GRIP, joints[JOINT_GRIP].home);
+  writeJointIndex(JOINT_WRIST, joints[JOINT_WRIST].home);
+  writeJointIndex(JOINT_WRIST_ROTATION, joints[JOINT_WRIST_ROTATION].home);
+  applyShoulder(joints[JOINT_SHOULDER_L].home);
+  rotateAngle = HOME_ROTATE;
+  syncTargetsToCurrent();
+}
+
+void moveToCarryPose() {
+  setShoulderTarget(CARRY_SHOULDER);
+  waitForServoMotion();
+  setJointTargetIndex(JOINT_WRIST, CARRY_WRIST);
+  waitForServoMotion();
+  delay(CARRY_SETTLE_MS);
+  moveLogicalJointSlow(JOINT_GRIP, PICKUP_CLOSE_GRIP);
+}
+
+void moveToPickupFloorPose() {
+  setShoulderTarget(PICKUP_SHOULDER);
+  waitForServoMotion();
+  setJointTargetIndex(JOINT_WRIST, PICKUP_WRIST);
+  waitForServoMotion();
+  delay(PICKUP_FLOOR_SETTLE_MS);
+}
+
+void shakeWristRotationLarge() {
+  for (int i = 0; i < PICKUP_SHAKE_REPEAT; i++) {
+    moveLogicalJointSlow(JOINT_WRIST_ROTATION, PICKUP_SHAKE_LEFT);
+    delay(120);
+    moveLogicalJointSlow(JOINT_WRIST_ROTATION, PICKUP_SHAKE_RIGHT);
+    delay(120);
+  }
+  moveLogicalJointSlow(JOINT_WRIST_ROTATION, PICKUP_SHAKE_CENTER);
 }
 
 void doPickup() {
-  while (gripAngle != clampInt(PICKUP_OPEN_GRIP, GRIP_MIN, GRIP_MAX)) {
-    if (gripAngle < PICKUP_OPEN_GRIP) {
-      applyGrip(gripAngle + 1);
-    } else {
-      applyGrip(gripAngle - 1);
-    }
-    delay(MACRO_STEP_DELAY_MS);
-  }
-  delay(200);
+  moveLogicalJointSlow(JOINT_WRIST_ROTATION, PICKUP_SHAKE_CENTER);
+  delay(100);
 
-  while (shoulderAngle != clampInt(PICKUP_SHOULDER, SHOULDER_MIN, SHOULDER_MAX)) {
-    if (shoulderAngle < PICKUP_SHOULDER) {
-      applyShoulder(shoulderAngle + 1);
-    } else {
-      applyShoulder(shoulderAngle - 1);
-    }
-    delay(MACRO_STEP_DELAY_MS);
-  }
-  delay(200);
+  moveLogicalJointSlow(JOINT_GRIP, PICKUP_OPEN_GRIP);
+  delay(150);
 
-  while (elbowAngle != clampInt(PICKUP_ELBOW, ELBOW_MIN, ELBOW_MAX)) {
-    if (elbowAngle < PICKUP_ELBOW) {
-      applyElbow(elbowAngle + 1);
-    } else {
-      applyElbow(elbowAngle - 1);
-    }
-    delay(MACRO_STEP_DELAY_MS);
-  }
-  delay(200);
+  setShoulderTarget(PICKUP_SHOULDER);
+  waitForServoMotion();
+  delay(150);
 
-  while (wristAngle != clampInt(PICKUP_WRIST, WRIST_MIN, WRIST_MAX)) {
-    if (wristAngle < PICKUP_WRIST) {
-      applyWrist(wristAngle + 1);
-    } else {
-      applyWrist(wristAngle - 1);
-    }
-    delay(MACRO_STEP_DELAY_MS);
-  }
-  delay(200);
+  setJointTargetIndex(JOINT_WRIST, PICKUP_WRIST);
+  waitForServoMotion();
+  delay(PICKUP_FLOOR_SETTLE_MS);
 
-  while (gripAngle != clampInt(PICKUP_CLOSE_GRIP, GRIP_MIN, GRIP_MAX)) {
-    if (gripAngle < PICKUP_CLOSE_GRIP) {
-      applyGrip(gripAngle + 1);
-    } else {
-      applyGrip(gripAngle - 1);
-    }
-    delay(MACRO_STEP_DELAY_MS);
-  }
-  delay(200);
+  moveLogicalJointSlow(JOINT_GRIP, PICKUP_CLOSE_GRIP);
+  delay(150);
 
-  moveJointSlow(shoulderAngle, HOME_SHOULDER, applyShoulder, SHOULDER_MIN, SHOULDER_MAX);
+  setShoulderTarget(CARRY_SHOULDER);
+  waitForServoMotion();
+  delay(150);
+
+  setJointTargetIndex(JOINT_WRIST, CARRY_WRIST);
+  waitForServoMotion();
+  delay(CARRY_SETTLE_MS);
+
+  delay(150);
+  shakeWristRotationLarge();
 }
 
 void doPlace() {
-  while (shoulderAngle != clampInt(PLACE_SHOULDER, SHOULDER_MIN, SHOULDER_MAX)) {
-    if (shoulderAngle < PLACE_SHOULDER) {
-      applyShoulder(shoulderAngle + 1);
-    } else {
-      applyShoulder(shoulderAngle - 1);
-    }
-    delay(MACRO_STEP_DELAY_MS);
-  }
-  delay(200);
-
-  while (elbowAngle != clampInt(PLACE_ELBOW, ELBOW_MIN, ELBOW_MAX)) {
-    if (elbowAngle < PLACE_ELBOW) {
-      applyElbow(elbowAngle + 1);
-    } else {
-      applyElbow(elbowAngle - 1);
-    }
-    delay(MACRO_STEP_DELAY_MS);
-  }
-  delay(200);
-
-  while (wristAngle != clampInt(PLACE_WRIST, WRIST_MIN, WRIST_MAX)) {
-    if (wristAngle < PLACE_WRIST) {
-      applyWrist(wristAngle + 1);
-    } else {
-      applyWrist(wristAngle - 1);
-    }
-    delay(MACRO_STEP_DELAY_MS);
-  }
-  delay(200);
-
-  while (gripAngle != clampInt(PLACE_OPEN_GRIP, GRIP_MIN, GRIP_MAX)) {
-    if (gripAngle < PLACE_OPEN_GRIP) {
-      applyGrip(gripAngle + 1);
-    } else {
-      applyGrip(gripAngle - 1);
-    }
-    delay(MACRO_STEP_DELAY_MS);
-  }
-}
-
-void doBlueNod() {
-  moveJointSlow(elbowAngle, elbowAngle + NOD_ELBOW_DELTA, applyElbow, ELBOW_MIN, ELBOW_MAX);
-  moveJointSlow(wristAngle, wristAngle - NOD_WRIST_DELTA, applyWrist, WRIST_MIN, WRIST_MAX);
+  setShoulderTarget(PLACE_SHOULDER);
+  waitForServoMotion();
+  setJointTargetIndex(JOINT_WRIST, PLACE_WRIST);
+  waitForServoMotion();
+  setShoulderTarget(CARRY_SHOULDER);
+  waitForServoMotion();
   delay(120);
-  moveJointSlow(elbowAngle, HOME_ELBOW, applyElbow, ELBOW_MIN, ELBOW_MAX);
-  moveJointSlow(wristAngle, HOME_WRIST, applyWrist, WRIST_MIN, WRIST_MAX);
+  moveLogicalJointSlow(JOINT_GRIP, PLACE_OPEN_GRIP);
 }
 
-BlueTarget getLargestBlueTarget() {
-  BlueTarget target = {false, 0, 0, 0, 0};
-  if (!pixyInitialized) {
-    return target;
-  }
-
-  pixy.ccc.getBlocks();
-
-  uint16_t bestArea = 0;
-  for (uint16_t i = 0; i < pixy.ccc.numBlocks; i++) {
-    Block block = pixy.ccc.blocks[i];
-    if (block.m_signature != BLUE_SIGNATURE) {
-      continue;
-    }
-
-    uint16_t area = block.m_width * block.m_height;
-    if (!target.found || area > bestArea) {
-      target.found = true;
-      target.x = block.m_x;
-      target.y = block.m_y;
-      target.width = block.m_width;
-      target.height = block.m_height;
-      bestArea = area;
-    }
-  }
-
-  return target;
-}
-
-bool ensurePixyReady() {
-  if (pixyInitialized) {
-    return true;
-  }
-
-  int result = pixy.init();
-  if (result < 0) {
-    Serial.println("ERR PIXY no response");
-    return false;
-  }
-
-  pixyInitialized = true;
-  Serial.println("OK PIXY_READY");
-  return true;
-}
-
-void autoBlueOff(const char* reason) {
-  autoBlueEnabled = false;
-  stopRotate();
-  Serial.print("OK AUTO_BLUE_OFF");
-  if (reason && reason[0] != '\0') {
-    Serial.print(" ");
-    Serial.print(reason);
-  }
-  Serial.println();
-}
-
-void autoBlueOn() {
-  if (!ensurePixyReady()) {
-    autoBlueEnabled = false;
-    return;
-  }
-
-  autoBlueEnabled = true;
-  blueNodEnabled = false;
-  autoPickupDone = false;
-  lastAutoStepMs = 0;
-  lastSearchSpinMs = 0;
-  Serial.println("OK AUTO_BLUE_ON");
-}
-
-void blueNodOn() {
-  if (!ensurePixyReady()) {
-    blueNodEnabled = false;
-    return;
-  }
-
-  blueNodEnabled = true;
-  autoBlueEnabled = false;
-  lastBlueNodMs = 0;
-  Serial.println("OK BLUE_NOD_ON");
-}
-
-void blueNodOff(const char* reason) {
-  blueNodEnabled = false;
-  Serial.print("OK BLUE_NOD_OFF");
-  if (reason && reason[0] != '\0') {
-    Serial.print(" ");
-    Serial.print(reason);
-  }
-  Serial.println();
-}
-
-void runAutoBlueLoop() {
-  if (!autoBlueEnabled) {
-    return;
-  }
-
-  unsigned long now = millis();
-  if (now - lastAutoStepMs < AUTO_LOOP_INTERVAL_MS) {
-    return;
-  }
-  lastAutoStepMs = now;
-
-  if (autoPickupDone) {
-    autoBlueOff("DONE");
-    return;
-  }
-
-  BlueTarget target = getLargestBlueTarget();
-  if (!target.found) {
-    if (now - lastSearchSpinMs >= SEARCH_SPIN_INTERVAL_MS) {
-      nudgeRotateRight();
-      delay(80);
-      stopRotate();
-      lastSearchSpinMs = now;
-      Serial.println("AUTO searching");
-    }
-    return;
-  }
-
-  int xError = target.x - PIXY_CENTER_X;
-  if (xError < -PIXY_TOLERANCE_X) {
-    nudgeRotateLeft();
-    Serial.println("AUTO align left");
-    return;
-  }
-
-  if (xError > PIXY_TOLERANCE_X) {
-    nudgeRotateRight();
-    Serial.println("AUTO align right");
-    return;
-  }
-
-  stopRotate();
-
-  if (target.width < PIXY_CLOSE_WIDTH) {
-    nudgeArmDown();
-    Serial.println("AUTO approach");
-    return;
-  }
-
-  Serial.println("AUTO pickup");
+void doFeed() {
+  int feedStartAngle = rotateAngle;
+  moveRotateSlow(feedStartAngle + FEED_BASE_DELTA);
   doPickup();
-  autoPickupDone = true;
+  moveRotateSlow(feedStartAngle);
+  doPlace();
 }
 
-void runBlueNodLoop() {
-  if (!blueNodEnabled) {
-    return;
-  }
-
-  unsigned long now = millis();
-  if (now - lastBlueNodMs < NOD_COOLDOWN_MS) {
-    return;
-  }
-
-  BlueTarget target = getLargestBlueTarget();
-  if (!target.found) {
-    return;
-  }
-
-  lastBlueNodMs = now;
-  Serial.println("BLUE detected");
-  doBlueNod();
-}
-
-bool parseTwoArgCommand(const String& line, String& keyword, String& arg1, int& arg2) {
+bool parseTwoArgCommand(const String& line, String& keyword, String& arg1, long& arg2) {
   int firstSpace = line.indexOf(' ');
   if (firstSpace < 0) return false;
   int secondSpace = line.indexOf(' ', firstSpace + 1);
@@ -506,104 +441,88 @@ bool parseTwoArgCommand(const String& line, String& keyword, String& arg1, int& 
   return true;
 }
 
-bool moveJointTo(const String& joint, int angle) {
-  if (joint == "shoulder") {
-    applyShoulder(angle);
-    return true;
-  }
-  if (joint == "elbow") {
-    applyElbow(angle);
-    return true;
-  }
-  if (joint == "wrist") {
-    applyWrist(angle);
-    return true;
-  }
-  if (joint == "wrist_rotation" || joint == "wrist_rotate") {
-    applyWristRotation(angle);
-    return true;
-  }
-  if (joint == "grip") {
-    applyGrip(angle);
-    return true;
-  }
-  if (joint == "rotate") {
+bool moveJointTo(const String& jointName, int angle) {
+  String name = jointName;
+  name.trim();
+  name.toLowerCase();
+  if (name == "rotate" || name == "base") {
     applyRotateRaw(angle);
     return true;
   }
-  return false;
-}
-
-bool stepJointBy(const String& joint, int delta) {
-  if (joint == "shoulder") {
-    applyShoulder(shoulderAngle + delta);
+  if (name == "shoulder") {
+    setShoulderTarget(angle);
     return true;
-  }
-  if (joint == "elbow") {
-    applyElbow(elbowAngle + delta);
-    return true;
-  }
-  if (joint == "wrist") {
-    applyWrist(wristAngle + delta);
-    return true;
-  }
-  if (joint == "wrist_rotation" || joint == "wrist_rotate") {
-    applyWristRotation(wristRotationAngle + delta);
-    return true;
-  }
-  if (joint == "grip") {
-    applyGrip(gripAngle + delta);
-    return true;
-  }
-  if (joint == "rotate") {
-    applyRotateRaw(rotateAngle + delta);
-    return true;
-  }
-  return false;
-}
-
-int channelForJoint(const String& joint) {
-  if (joint == "shoulder_l") return SHOULDER_L;
-  if (joint == "shoulder_r") return SHOULDER_R;
-  if (joint == "elbow") return ELBOW;
-  if (joint == "wrist") return WRIST;
-  if (joint == "wrist_rotation" || joint == "wrist_rotate") return WRIST_ROTATION;
-  if (joint == "grip") return GRIP;
-  return -1;
-}
-
-bool testJointServo(const String& joint) {
-  int channel = channelForJoint(joint);
-  if (channel < 0) {
-    return false;
   }
 
-  for (int i = 0; i < 3; i++) {
-    servo.setAngle(channel, 60);
-    delay(500);
-    servo.setAngle(channel, 120);
-    delay(500);
+  int index = findJointIndex(name);
+  if (index < 0) return false;
+  if (index == JOINT_SHOULDER_L || index == JOINT_SHOULDER_R) {
+    setShoulderTarget(angle);
+    return true;
   }
-
-  if (joint == "shoulder_l" || joint == "shoulder_r") {
-    applyShoulder(shoulderAngle);
-  } else if (joint == "elbow") {
-    applyElbow(elbowAngle);
-  } else if (joint == "wrist") {
-    applyWrist(wristAngle);
-  } else if (joint == "wrist_rotation" || joint == "wrist_rotate") {
-    applyWristRotation(wristRotationAngle);
-  } else if (joint == "grip") {
-    applyGrip(gripAngle);
-  }
+  setJointTargetIndex((byte)index, angle);
   return true;
 }
 
-void printKnownI2CProbe() {
-  const byte addresses[] = {0x40, 0x70, 0x7F};
+bool stepJointBy(const String& jointName, int delta) {
+  String name = jointName;
+  name.trim();
+  name.toLowerCase();
+  if (name == "rotate" || name == "base") {
+    applyRotateRaw(rotateAngle + delta);
+    return true;
+  }
+  if (name == "shoulder") {
+    setShoulderTarget(jointTargets[JOINT_SHOULDER_L] + delta);
+    return true;
+  }
+
+  int index = findJointIndex(name);
+  if (index < 0) return false;
+  if (index == JOINT_SHOULDER_L || index == JOINT_SHOULDER_R) {
+    setShoulderTarget(jointTargets[JOINT_SHOULDER_L] + delta);
+    return true;
+  }
+  setJointTargetIndex((byte)index, jointTargets[index] + delta);
+  return true;
+}
+
+bool applyMoveMulti(String args) {
+  args.trim();
+  bool appliedAny = false;
+
+  while (args.length() > 0) {
+    int firstSpace = args.indexOf(' ');
+    if (firstSpace < 0) return false;
+
+    String jointName = args.substring(0, firstSpace);
+    jointName.trim();
+    args = args.substring(firstSpace + 1);
+    args.trim();
+
+    int secondSpace = args.indexOf(' ');
+    String valueText;
+    if (secondSpace < 0) {
+      valueText = args;
+      args = "";
+    } else {
+      valueText = args.substring(0, secondSpace);
+      args = args.substring(secondSpace + 1);
+    }
+    valueText.trim();
+
+    if (!moveJointTo(jointName, valueText.toInt())) {
+      return false;
+    }
+    appliedAny = true;
+  }
+
+  return appliedAny;
+}
+
+void printI2CScan() {
   Serial.print("I2C");
-  for (byte i = 0; i < sizeof(addresses); i++) {
-    byte address = addresses[i];
+  for (byte address = 1; address < 127; address++) {
     Wire.beginTransmission(address);
     byte error = Wire.endTransmission();
     if (error == 0) {
@@ -615,20 +534,46 @@ void printKnownI2CProbe() {
   Serial.println();
 }
 
+void printChannels() {
+  Serial.print("CHANNELS");
+  for (byte i = 0; i < JOINT_COUNT; i++) {
+    Serial.print(" ");
+    Serial.print(joints[i].name);
+    Serial.print("=");
+    Serial.print(joints[i].channel);
+  }
+  Serial.println();
+}
+
 void printState() {
   Serial.print("STATE {\"shoulder\":");
-  Serial.print(shoulderAngle);
-  Serial.print(",\"elbow\":");
-  Serial.print(elbowAngle);
+  Serial.print(joints[JOINT_SHOULDER_L].value);
+  Serial.print(",\"shoulder_l\":");
+  Serial.print(joints[JOINT_SHOULDER_L].value);
+  Serial.print(",\"shoulder_r\":");
+  Serial.print(joints[JOINT_SHOULDER_R].value);
   Serial.print(",\"wrist\":");
-  Serial.print(wristAngle);
+  Serial.print(joints[JOINT_WRIST].value);
   Serial.print(",\"wrist_rotation\":");
-  Serial.print(wristRotationAngle);
+  Serial.print(joints[JOINT_WRIST_ROTATION].value);
   Serial.print(",\"grip\":");
-  Serial.print(gripAngle);
+  Serial.print(joints[JOINT_GRIP].value);
   Serial.print(",\"rotate\":");
   Serial.print(rotateAngle);
   Serial.println("}");
+}
+
+bool testJointServo(const String& jointName) {
+  int index = findJointIndex(jointName);
+  if (index < 0) return false;
+
+  int original = joints[index].value;
+  writeJointIndex(index, 75);
+  delay(450);
+  writeJointIndex(index, 105);
+  delay(450);
+  writeJointIndex(index, original);
+  return true;
 }
 
 void handleCommand(String cmd) {
@@ -648,13 +593,14 @@ void handleCommand(String cmd) {
 
   if (cmd == "HOME") {
     Serial.println("OK HOME");
-    homeAllSlow();
+    homeAll(true);
     return;
   }
 
   if (cmd == "STOP") {
+    stopServoMotion();
+    setStepperEnabled(false);
     Serial.println("OK STOP");
-    homeAllSlow();
     return;
   }
 
@@ -663,60 +609,74 @@ void handleCommand(String cmd) {
     return;
   }
 
-  if (cmd == "I2C_SCAN") {
-    printKnownI2CProbe();
+  if (cmd == "I2C_SCAN" || cmd == "I2C_PROBE") {
+    printI2CScan();
     return;
   }
 
-  if (cmd == "I2C_PROBE") {
-    printKnownI2CProbe();
+  if (cmd == "CHANNELS") {
+    printChannels();
     return;
   }
 
-  if (cmd == "AUTO_BLUE_ON") {
-    autoBlueOn();
-    return;
-  }
-
-  if (cmd == "AUTO_BLUE_OFF") {
-    autoBlueOff("MANUAL");
-    return;
-  }
-
-  if (cmd == "BLUE_NOD_ON") {
-    blueNodOn();
-    return;
-  }
-
-  if (cmd == "BLUE_NOD_OFF") {
-    blueNodOff("MANUAL");
-    return;
-  }
-
-  if (cmd == "AUTO_BLUE_STATUS") {
-    Serial.print("AUTO_BLUE ");
-    Serial.println(autoBlueEnabled ? "ON" : "OFF");
-    return;
-  }
-
-  if (cmd == "PICKUP") {
-    autoBlueEnabled = false;
+  if (cmd == "PICKUP" || cmd == "PICKUP_1") {
     Serial.println("OK PICKUP");
     doPickup();
     return;
   }
 
-  if (cmd == "PLACE") {
-    autoBlueEnabled = false;
+  if (cmd == "PICKUP_2") {
+    Serial.println("OK PICKUP_2");
+    moveRotateSlow(120);
+    doPickup();
+    return;
+  }
+
+  if (cmd == "PLACE" || cmd == "PLACE_1" || cmd == "PLACE_2") {
     Serial.println("OK PLACE");
     doPlace();
     return;
   }
 
+  if (cmd == "FEED") {
+    Serial.println("OK FEED");
+    doFeed();
+    return;
+  }
+
+  if (cmd == "AUTO_BLUE_ON" || cmd == "BLUE_NOD_ON") {
+    Serial.println("ERR PIXY_DISABLED use PC webcam control");
+    return;
+  }
+
+  if (cmd == "AUTO_BLUE_OFF") {
+    Serial.println("OK AUTO_BLUE_OFF DISABLED");
+    return;
+  }
+
+  if (cmd == "BLUE_NOD_OFF") {
+    Serial.println("OK BLUE_NOD_OFF DISABLED");
+    return;
+  }
+
+  if (cmd == "AUTO_BLUE_STATUS") {
+    Serial.println("AUTO_BLUE OFF");
+    return;
+  }
+
+  if (cmd.startsWith("MOVE_MULTI ")) {
+    if (applyMoveMulti(cmd.substring(11))) {
+      Serial.println("OK MOVE_MULTI");
+      return;
+    }
+    Serial.println("ERR MOVE_MULTI expects joint angle pairs");
+    return;
+  }
+
   String keyword;
-  String joint;
-  int value = 0;
-  if (!parseTwoArgCommand(cmd, keyword, joint, value)) {
+  String arg1;
+  long value = 0;
+  if (!parseTwoArgCommand(cmd, keyword, arg1, value)) {
     Serial.println("ERR bad command");
     return;
   }
@@ -724,9 +684,9 @@ void handleCommand(String cmd) {
   keyword.toUpperCase();
 
   if (keyword == "MOVE") {
-    if (moveJointTo(joint, value)) {
+    if (moveJointTo(arg1, (int)value)) {
       Serial.print("OK MOVE ");
-      Serial.println(joint);
+      Serial.println(arg1);
       return;
     }
     Serial.println("ERR unknown joint");
@@ -734,9 +694,9 @@ void handleCommand(String cmd) {
   }
 
   if (keyword == "STEP") {
-    if (stepJointBy(joint, value)) {
+    if (stepJointBy(arg1, (int)value)) {
       Serial.print("OK STEP ");
-      Serial.println(joint);
+      Serial.println(arg1);
       return;
     }
     Serial.println("ERR unknown joint");
@@ -744,8 +704,8 @@ void handleCommand(String cmd) {
   }
 
   if (keyword == "SPIN") {
-    if (joint == "rotate") {
-      applyRotateRaw(rotateAngle + value);
+    if (arg1 == "rotate") {
+      applyRotateRaw(rotateAngle + (int)value);
       Serial.println("OK SPIN rotate");
       return;
     }
@@ -754,12 +714,12 @@ void handleCommand(String cmd) {
   }
 
   if (keyword == "STEPPER") {
-    if (joint == "move") {
+    if (arg1 == "move") {
       moveStepper(value);
       Serial.println("OK STEPPER move");
       return;
     }
-    if (joint == "enable") {
+    if (arg1 == "enable") {
       setStepperEnabled(value != 0);
       Serial.println(stepperEnabled ? "OK STEPPER enable" : "OK STEPPER disable");
       return;
@@ -769,12 +729,31 @@ void handleCommand(String cmd) {
   }
 
   if (keyword == "SERVO_TEST") {
-    if (testJointServo(joint)) {
+    if (testJointServo(arg1)) {
       Serial.print("OK SERVO_TEST ");
-      Serial.println(joint);
+      Serial.println(arg1);
       return;
     }
     Serial.println("ERR unknown joint");
+    return;
+  }
+
+  if (keyword == "RAW") {
+    int channel = clampInt(arg1.toInt(), 0, 15);
+    writeRawChannel((byte)channel, (int)value);
+    Serial.println("OK RAW");
+    return;
+  }
+
+  if (keyword == "CHANNEL") {
+    int index = findJointIndex(arg1);
+    if (index < 0) {
+      Serial.println("ERR unknown joint");
+      return;
+    }
+    joints[index].channel = (byte)clampInt((int)value, 0, 15);
+    Serial.print("OK CHANNEL ");
+    Serial.println(arg1);
     return;
   }
 
@@ -784,27 +763,30 @@ void handleCommand(String cmd) {
 void setup() {
   Wire.begin();
   Serial.begin(SERIAL_BAUD);
+
   pinMode(STEPPER_STEP_PIN, OUTPUT);
   pinMode(STEPPER_DIR_PIN, OUTPUT);
   pinMode(STEPPER_ENABLE_PIN, OUTPUT);
   digitalWrite(STEPPER_STEP_PIN, LOW);
   digitalWrite(STEPPER_DIR_PIN, LOW);
   setStepperEnabled(false);
+
   delay(300);
   Serial.println("BOOT serial ready");
+  Serial.println("BOOT adafruit pwm init");
+  if (!pwm.begin()) {
+    Serial.println("ERR PWM no response");
+  }
+  pwm.setOscillatorFrequency(27000000);
+  pwm.setPWMFreq(SERVO_FREQ_HZ);
+  delay(300);
 
-  Serial.println("BOOT servo init");
-  servo.init(0x7f);
-  Serial.println("BOOT home");
-  delay(500);
-
-  homeAll();
+  loadPersistentState();
   Serial.println("OpenClaw primitive bridge ready");
 }
 
 void loop() {
-  runAutoBlueLoop();
-  runBlueNodLoop();
+  updateServoMotion();
 
   while (Serial.available() > 0) {
     char c = (char)Serial.read();
@@ -817,4 +799,6 @@ void loop() {
       inputLine += c;
     }
   }
+
+  updateServoMotion();
 }

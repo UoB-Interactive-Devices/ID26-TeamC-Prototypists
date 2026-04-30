@@ -66,12 +66,52 @@ python -m control.cli --port /dev/cu.usbmodem1101 run arm_down_small
 python -m control.cli --port /dev/cu.usbmodem1101 run open_grip
 ```
 
+Use the webcam as a color-command controller:
+
+```bash
+python -m control.cli --port /dev/cu.usbmodem1101 webcam --mode palette
+```
+
+In `palette` mode, hold a colored object in view for about a second:
+
+- blue: pickup
+- green: place
+- yellow: home
+- red: stop
+
+Track and approach one color:
+
+```bash
+python -m control.cli --port /dev/cu.usbmodem1101 webcam --mode track --colors blue
+```
+
+Preview detections without moving the robot:
+
+```bash
+python -m control.cli webcam --mode palette --dry-run --verbose
+```
+
 Send safety actions:
 
 ```bash
 python -m control.cli --port /dev/cu.usbmodem1101 home
 python -m control.cli --port /dev/cu.usbmodem1101 stop
 ```
+
+Serve one shared camera for browser/Telegram/OpenClaw detection:
+
+```bash
+python -m control.cli stream \
+  --camera 0 \
+  --model /Users/kanghyeon/Documents/Arduino/runs/detect/train/weights/best.pt \
+  --conf 0.7 \
+  --width 640 \
+  --height 480 \
+  --fps 15
+```
+
+Open `/stream` for the raw camera, `/annotated_stream` for YOLO boxes, and use
+`/detect` for OpenClaw or Telegram one-shot detection.
 
 ## How An Agent Uses It
 

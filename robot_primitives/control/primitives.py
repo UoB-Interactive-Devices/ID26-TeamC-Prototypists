@@ -24,7 +24,6 @@ def clamp(joint: str, value: int) -> int:
 @dataclass
 class ArmState:
     shoulder: int = DEFAULT_STATE["shoulder"]
-    elbow: int = DEFAULT_STATE["elbow"]
     wrist: int = DEFAULT_STATE["wrist"]
     wrist_rotation: int = DEFAULT_STATE["wrist_rotation"]
     grip: int = DEFAULT_STATE["grip"]
@@ -34,7 +33,6 @@ class ArmState:
     def from_mapping(cls, payload: dict[str, int]) -> "ArmState":
         return cls(
             shoulder=int(payload.get("shoulder", DEFAULT_STATE["shoulder"])),
-            elbow=int(payload.get("elbow", DEFAULT_STATE["elbow"])),
             wrist=int(payload.get("wrist", DEFAULT_STATE["wrist"])),
             wrist_rotation=int(
                 payload.get("wrist_rotation", DEFAULT_STATE["wrist_rotation"])
@@ -46,7 +44,6 @@ class ArmState:
     def as_dict(self) -> dict[str, int]:
         return {
             "shoulder": self.shoulder,
-            "elbow": self.elbow,
             "wrist": self.wrist,
             "wrist_rotation": self.wrist_rotation,
             "grip": self.grip,
@@ -92,7 +89,6 @@ def close_grip(_: ArmState) -> list[Command]:
 def arm_down_small(state: ArmState) -> list[Command]:
     return [
         Command("move", "shoulder", clamp("shoulder", state.shoulder + STEP_SIZES["small"])),
-        Command("move", "elbow", clamp("elbow", state.elbow + STEP_SIZES["small"])),
         Command("move", "wrist", clamp("wrist", state.wrist - STEP_SIZES["small"])),
     ]
 
@@ -100,7 +96,6 @@ def arm_down_small(state: ArmState) -> list[Command]:
 def arm_up_small(state: ArmState) -> list[Command]:
     return [
         Command("move", "shoulder", clamp("shoulder", state.shoulder - STEP_SIZES["small"])),
-        Command("move", "elbow", clamp("elbow", state.elbow - STEP_SIZES["small"])),
         Command("move", "wrist", clamp("wrist", state.wrist + STEP_SIZES["small"])),
     ]
 
@@ -127,8 +122,32 @@ def pickup(_: ArmState) -> list[Command]:
     return [Command("macro", "pickup", 0, pause_s=0.1)]
 
 
+def pickup_1(_: ArmState) -> list[Command]:
+    return [Command("macro", "pickup_1", 0, pause_s=0.1)]
+
+
+def pickup_2(_: ArmState) -> list[Command]:
+    return [Command("macro", "pickup_2", 0, pause_s=0.1)]
+
+
+def play(_: ArmState) -> list[Command]:
+    return [Command("macro", "play", 0, pause_s=0.1)]
+
+
 def place(_: ArmState) -> list[Command]:
     return [Command("macro", "place", 0, pause_s=0.1)]
+
+
+def place_1(_: ArmState) -> list[Command]:
+    return [Command("macro", "place_1", 0, pause_s=0.1)]
+
+
+def place_2(_: ArmState) -> list[Command]:
+    return [Command("macro", "place_2", 0, pause_s=0.1)]
+
+
+def feed(_: ArmState) -> list[Command]:
+    return [Command("macro", "feed", 0, pause_s=0.1)]
 
 
 PRIMITIVES: dict[str, PrimitiveBuilder] = {
@@ -140,8 +159,6 @@ PRIMITIVES: dict[str, PrimitiveBuilder] = {
     "close_grip": close_grip,
     "shoulder_up_small": _single_step("shoulder", -STEP_SIZES["small"]),
     "shoulder_down_small": _single_step("shoulder", STEP_SIZES["small"]),
-    "elbow_up_small": _single_step("elbow", -STEP_SIZES["small"]),
-    "elbow_down_small": _single_step("elbow", STEP_SIZES["small"]),
     "wrist_up_small": _single_step("wrist", STEP_SIZES["small"]),
     "wrist_down_small": _single_step("wrist", -STEP_SIZES["small"]),
     "wrist_rotate_left_small": _single_step("wrist_rotation", -STEP_SIZES["small"]),
@@ -151,7 +168,13 @@ PRIMITIVES: dict[str, PrimitiveBuilder] = {
     "arm_down_small": arm_down_small,
     "arm_up_small": arm_up_small,
     "pickup": pickup,
+    "pickup_1": pickup_1,
+    "pickup_2": pickup_2,
+    "play": play,
     "place": place,
+    "place_1": place_1,
+    "place_2": place_2,
+    "feed": feed,
     "rotate_left_small": rotate_left_small,
     "rotate_right_small": rotate_right_small,
     "rotate_stop": rotate_stop,
@@ -190,8 +213,20 @@ def run_primitive(name: str, client, state: ArmState | None = None, verbose: boo
         elif command.kind == "macro":
             if command.joint == "pickup":
                 client.pickup()
+            elif command.joint == "pickup_1":
+                client.pickup_1()
+            elif command.joint == "pickup_2":
+                client.pickup_2()
+            elif command.joint == "play":
+                client.play()
             elif command.joint == "place":
                 client.place()
+            elif command.joint == "place_1":
+                client.place_1()
+            elif command.joint == "place_2":
+                client.place_2()
+            elif command.joint == "feed":
+                client.feed()
             else:
                 raise ValueError(f"Unsupported macro command: {command.joint}")
         else:

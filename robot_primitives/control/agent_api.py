@@ -4,6 +4,8 @@ import argparse
 import json
 import os
 import sys
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from typing import Any
 
@@ -14,7 +16,8 @@ from .kinematics import (
     within_joint_limits,
 )
 from .primitives import ArmState, list_primitives, run_primitive
-from .serial_client import RobotArmSerialClient
+from .serial_client import RobotArmSerialClient, resolve_serial_port
+from .webcam_control import run_webcam_control
 
 
 def load_env_file(path: str = ".env") -> None:
@@ -36,6 +39,8 @@ def load_env_file(path: str = ".env") -> None:
 def normalize_serial_port(raw: str) -> str:
     raw = raw.strip()
     if not raw:
+        return raw
+    if raw.lower() == "auto":
         return raw
     first = raw.split()[0]
     if first.startswith("/dev/"):
@@ -62,37 +67,52 @@ def normalize_joint_name(raw: str) -> str:
 class Config:
     serial_port: str
     baudrate: int
+    detect_url: str
 
     @staticmethod
     def from_env() -> "Config":
         serial_port = normalize_serial_port(os.environ.get("ROBOT_ARM_SERIAL_PORT", ""))
         if not serial_port:
-            raise ValueError("ROBOT_ARM_SERIAL_PORT is missing")
+            serial_port = "auto"
 
         baudrate = int(os.environ.get("ROBOT_ARM_BAUDRATE", "115200"))
-        return Config(serial_port=serial_port, baudrate=baudrate)
+        detect_url = os.environ.get("ROBOT_ARM_DETECT_URL", "http://127.0.0.1:8080/detect").strip()
+        return Config(serial_port=serial_port, baudrate=baudrate, detect_url=detect_url)
 
 
 class AgentRobotController:
-    def __init__(self, port: str, baudrate: int) -> None:
-        self.client = RobotArmSerialClient(port=port, baudrate=baudrate)
+    def __init__(self, port: str, baudrate: int, detect_url: str) -> None:
+        self.port = port
+        self.baudrate = baudrate
+        self.detect_url = detect_url
+        self._client: RobotArmSerialClient | None = None
+
+    @property
+    def client(self) -> RobotArmSerialClient:
+        if self._client is None:
+            self._client = RobotArmSerialClient(
+                port=resolve_serial_port(self.port),
+                baudrate=self.baudrate,
+            )
+        return self._client
 
     def close(self) -> None:
-        self.client.close()
+        if self._client is not None:
+            self._client.close()
+            self._client = None
 
     def move_to_xyz(self, args: dict[str, Any]) -> dict[str, Any]:
         x = float(args["x"])
         y = float(args["y"])
         z = float(args["z"])
         wrist_pitch = float(args.get("wrist_pitch", 0.0))
-        elbow_up = bool(args.get("elbow_up", False))
 
         solution = solve_inverse_kinematics(
             x,
             y,
             z,
             wrist_pitch_deg=wrist_pitch,
-            elbow_up=elbow_up,
+            elbow_up=False,
         )
         servo_angles = solution.servo_angles(DEFAULT_SERVO_CALIBRATION)
         ok, reason = within_joint_limits(servo_angles)
@@ -104,14 +124,17 @@ class AgentRobotController:
             "action": "move_to",
             "target_mm": {"x": x, "y": y, "z": z},
             "wrist_pitch": wrist_pitch,
-            "elbow_up": elbow_up,
             "ik_degrees": {
                 "rotate": round(solution.rotate, 2),
                 "shoulder": round(solution.shoulder, 2),
-                "elbow": round(solution.elbow, 2),
                 "wrist": round(solution.wrist, 2),
             },
-            "servo_angles": servo_angles,
+            "servo_angles": {
+                joint: angle
+                for joint, angle in servo_angles.items()
+                if joint != "elbow"
+            },
+            "note": "Elbow servo is disabled/removed; move_to sends rotate, shoulder, and wrist only.",
         }
 
         if bool(args.get("dry_run", False)):
@@ -121,7 +144,6 @@ class AgentRobotController:
         result["reply"] = {
             "rotate": self.client.move("rotate", servo_angles["rotate"]),
             "shoulder": self.client.move("shoulder", servo_angles["shoulder"]),
-            "elbow": self.client.move("elbow", servo_angles["elbow"]),
             "wrist": self.client.move("wrist", servo_angles["wrist"]),
         }
         return result
@@ -152,6 +174,47 @@ class AgentRobotController:
             f"{destination_color} {destination_type}."
         )
 
+    def webcam_control(self, args: dict[str, Any]) -> dict[str, Any]:
+        raw_colors = args.get("colors", ["blue", "green", "yellow", "red"])
+        if isinstance(raw_colors, str):
+            colors = raw_colors.split(",")
+        else:
+            colors = [str(color) for color in raw_colors]
+
+        result = run_webcam_control(
+            port=self.port,
+            baudrate=self.baudrate,
+            camera=args.get("camera", "external"),
+            mode=str(args.get("mode", "palette")),
+            colors=colors,
+            duration_s=float(args.get("duration", 30.0)),
+            width=int(args.get("width", 640)),
+            height=int(args.get("height", 480)),
+            min_area=int(args.get("min_area", 900)),
+            interval_s=float(args.get("interval", 0.35)),
+            trigger_hold_s=float(args.get("trigger_hold", 1.0)),
+            deadzone=float(args.get("deadzone", 0.18)),
+            close_ratio=float(args.get("close_ratio", 0.08)),
+            dry_run=as_bool(args.get("dry_run", False)),
+            verbose=as_bool(args.get("verbose", False)),
+        )
+        return dict(result)
+
+    def detect(self, args: dict[str, Any]) -> dict[str, Any]:
+        detect_url = str(args.get("url", self.detect_url)).strip()
+        request = urllib.request.Request(detect_url, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=float(args.get("timeout", 30))) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                "Detection server is not reachable. Start the stream server with --model first."
+            ) from exc
+
+        if not isinstance(payload, dict):
+            raise ValueError("Detection server returned non-object JSON")
+        return payload
+
     def dispatch(self, action: str, args: dict[str, Any]) -> dict[str, Any]:
         action = action.strip().lower()
 
@@ -173,14 +236,28 @@ class AgentRobotController:
             }
         if action == "state":
             return {"ok": True, "action": action, "state": self.client.get_state()}
+        if action == "detect":
+            return self.detect(args)
         if action == "home":
             return {"ok": True, "action": action, "reply": self.client.home()}
         if action == "stop":
             return {"ok": True, "action": action, "reply": self.client.stop()}
         if action == "pickup":
             return {"ok": True, "action": action, "reply": self.client.pickup()}
+        if action == "pickup_1":
+            return {"ok": True, "action": action, "reply": self.client.pickup_1()}
+        if action == "pickup_2":
+            return {"ok": True, "action": action, "reply": self.client.pickup_2()}
         if action == "place":
             return {"ok": True, "action": action, "reply": self.client.place()}
+        if action == "place_1":
+            return {"ok": True, "action": action, "reply": self.client.place_1()}
+        if action == "place_2":
+            return {"ok": True, "action": action, "reply": self.client.place_2()}
+        if action == "feed":
+            return {"ok": True, "action": action, "reply": self.client.feed()}
+        if action == "play":
+            return {"ok": True, "action": action, "reply": self.client.play()}
         if action == "auto_blue_on":
             return {"ok": True, "action": action, "reply": self.client.auto_blue_on()}
         if action == "auto_blue_off":
@@ -197,8 +274,12 @@ class AgentRobotController:
             return self.pick_object(args)
         if action == "move_object_to":
             return self.move_object_to(args)
+        if action == "webcam_control":
+            return self.webcam_control(args)
         if action == "move":
             joint = normalize_joint_name(str(args["joint"]))
+            if joint == "elbow":
+                raise ValueError("Elbow joint is disabled/removed")
             angle = int(args["angle"])
             return {
                 "ok": True,
@@ -209,6 +290,8 @@ class AgentRobotController:
             }
         if action == "step":
             joint = normalize_joint_name(str(args["joint"]))
+            if joint == "elbow":
+                raise ValueError("Elbow joint is disabled/removed")
             delta = int(args["delta"])
             return {
                 "ok": True,
@@ -294,7 +377,7 @@ def main() -> int:
         port = normalize_serial_port(args.port) if args.port else cfg.serial_port
         baudrate = args.baudrate if args.baudrate else cfg.baudrate
 
-        controller = AgentRobotController(port=port, baudrate=baudrate)
+        controller = AgentRobotController(port=port, baudrate=baudrate, detect_url=cfg.detect_url)
         try:
             result = controller.dispatch(str(payload["action"]), payload)
         finally:
