@@ -91,9 +91,28 @@ python -m control.agent_api --input '{"action":"home"}'
 python -m control.agent_api --input '{"action":"run","name":"ready"}'
 python -m control.agent_api --input '{"action":"move","joint":"shoulder","angle":95}'
 python -m control.agent_api --input '{"action":"auto_blue_on"}'
+python -m control.agent_api --input '{"action":"webcam_control","mode":"palette","duration":30}'
 ```
 
 This is the recommended interface for OpenClaw because it returns structured JSON.
+
+## Webcam Control
+
+The PC can use a USB webcam as OpenClaw's eyes:
+
+```bash
+python -m control.cli --port /dev/cu.usbmodem1101 webcam --mode palette
+python -m control.cli --port /dev/cu.usbmodem1101 webcam --mode track --colors blue
+```
+
+`palette` maps colored cards/objects to commands:
+
+- blue: pickup
+- green: place
+- yellow: home
+- red: stop
+
+`track` follows one selected color and picks it up when it fills enough of the frame.
 
 ## Important Note
 

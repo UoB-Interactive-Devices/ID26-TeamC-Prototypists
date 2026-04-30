@@ -14,6 +14,7 @@ The script reads `.env` for:
 
 - `ROBOT_ARM_SERIAL_PORT`
 - `ROBOT_ARM_BAUDRATE`
+- `ROBOT_ARM_DETECT_URL`
 
 It returns JSON on stdout.
 
@@ -34,6 +35,7 @@ The command must:
 - read the prompt from stdin
 - return one JSON object on stdout
 - choose only one allowed robot action
+- return `{"action":"help"}` for multi-step requests like `pick up and place`
 
 Example JSON output:
 
@@ -71,6 +73,38 @@ or:
 {"action":"move_object_to","object_color":"blue","destination_color":"red","destination_type":"flag"}
 ```
 
+For webcam-driven commands, OpenClaw can output:
+
+```json
+{"action":"detect"}
+```
+
+This runs YOLO once on the latest frame from the live camera stream.
+Start the stream server first with `--model` so `/detect` is available.
+The same server also exposes the raw live view at `/stream` and the YOLO
+overlay live view at `/annotated_stream`, so OpenClaw does not need to open
+the physical webcam itself for detection.
+
+```bash
+python -m control.cli stream \
+  --camera 0 \
+  --model /Users/kanghyeon/Documents/Arduino/runs/detect/train/weights/best.pt \
+  --conf 0.7 \
+  --width 640 \
+  --height 480 \
+  --fps 15
+```
+
+```json
+{"action":"webcam_control","mode":"palette","duration":30}
+```
+
+or:
+
+```json
+{"action":"webcam_control","mode":"track","colors":["blue"],"duration":30}
+```
+
 If OpenClaw fails, the Telegram bot falls back to the local rule parser.
 
 ## Supported Actions
@@ -89,13 +123,34 @@ High-level actions:
 python -m control.agent_api --input '{"action":"home"}'
 python -m control.agent_api --input '{"action":"stop"}'
 python -m control.agent_api --input '{"action":"pickup"}'
+python -m control.agent_api --input '{"action":"pickup_1"}'
+python -m control.agent_api --input '{"action":"pickup_2"}'
 python -m control.agent_api --input '{"action":"place"}'
+python -m control.agent_api --input '{"action":"place_1"}'
+python -m control.agent_api --input '{"action":"place_2"}'
 python -m control.agent_api --input '{"action":"auto_blue_on"}'
 python -m control.agent_api --input '{"action":"auto_blue_off"}'
 python -m control.agent_api --input '{"action":"auto_blue_status"}'
 python -m control.agent_api --input '{"action":"blue_nod_on"}'
 python -m control.agent_api --input '{"action":"blue_nod_off"}'
 ```
+
+Webcam actions:
+
+```bash
+python -m control.agent_api --input '{"action":"detect"}'
+python -m control.agent_api --input '{"action":"webcam_control","mode":"palette","duration":30}'
+python -m control.agent_api --input '{"action":"webcam_control","mode":"track","colors":["blue"],"duration":30}'
+```
+
+`palette` mode uses a USB/webcam on the PC and maps colors to high-level commands:
+
+- blue: pickup
+- green: place
+- yellow: home
+- red: stop
+
+`track` mode expects one color and nudges rotate/arm primitives until the target is centered and close enough to pick up.
 
 Coordinate actions:
 
@@ -137,9 +192,12 @@ Give OpenClaw these rules:
 2. Use `move` and `step` only for calibration or recovery.
 3. Use `auto_blue_on` only after Pixy2 has been trained on the blue target as signature 1.
 4. Use `move_to` only when explicit millimeter coordinates are known.
-5. Treat object-to-object tasks as unavailable until color signatures and camera-to-robot calibration are completed.
-6. Always read `state` before making repeated low-level adjustments.
-7. Fall back to `home` or `stop` if the arm behaves unexpectedly.
+5. Use `detect` when the user asks to run object detection once on the live camera stream.
+6. Use `webcam_control` when the user explicitly asks the robot to use color-based webcam control.
+7. Treat object-to-object tasks as unavailable until color signatures and camera-to-robot calibration are completed.
+8. Always read `state` before making repeated low-level adjustments.
+9. If the user asks for multiple actions in one sentence, return `{"action":"help"}` instead of choosing one.
+10. Fall back to `home` or `stop` if the arm behaves unexpectedly.
 
 ## Why This Interface
 

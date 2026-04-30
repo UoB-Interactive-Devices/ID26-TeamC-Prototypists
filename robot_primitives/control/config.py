@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 
 
-STANDARD_JOINTS = ("shoulder", "elbow", "wrist", "wrist_rotation", "grip")
+STANDARD_JOINTS = ("shoulder", "wrist", "wrist_rotation", "grip")
 ALL_JOINTS = STANDARD_JOINTS + ("rotate",)
 
 
@@ -12,18 +12,16 @@ class JointLimit:
 
 
 JOINT_LIMITS = {
-    "shoulder": JointLimit(45, 135),
-    "elbow": JointLimit(0, 180),
+    "shoulder": JointLimit(0, 180),
     "wrist": JointLimit(0, 180),
     "wrist_rotation": JointLimit(0, 180),
     "grip": JointLimit(20, 120),
-    "rotate": JointLimit(60, 120),
+    "rotate": JointLimit(-32768, 32767),
 }
 
 
 DEFAULT_STATE = {
-    "shoulder": 90,
-    "elbow": 90,
+    "shoulder": 0,
     "wrist": 90,
     "wrist_rotation": 90,
     "grip": 90,
@@ -33,29 +31,25 @@ DEFAULT_STATE = {
 
 POSES = {
     "home": {
-        "shoulder": 90,
-        "elbow": 90,
+        "shoulder": 0,
         "wrist": 90,
         "wrist_rotation": 90,
         "grip": 90,
     },
     "ready": {
-        "shoulder": 82,
-        "elbow": 98,
+        "shoulder": 150,
         "wrist": 92,
         "wrist_rotation": 90,
         "grip": 95,
     },
     "floor_pick": {
         "shoulder": 110,
-        "elbow": 120,
         "wrist": 80,
         "wrist_rotation": 90,
         "grip": 110,
     },
     "carry": {
-        "shoulder": 75,
-        "elbow": 85,
+        "shoulder": 160,
         "wrist": 100,
         "wrist_rotation": 90,
         "grip": 55,

@@ -7,6 +7,8 @@ import os
 import re
 import shlex
 import subprocess
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 
 from telegram import Update
@@ -28,15 +30,20 @@ logging.basicConfig(
 )
 logger = logging.getLogger("robot-primitives-telegram")
 
-JOINT_WORDS = {"shoulder", "elbow", "wrist", "wrist_rotation", "grip", "rotate"}
-JOINT_PATTERN = r"shoulder|elbow|wrist rotation|wrist rotate|wrist_rotation|wrist_rotate|wrist|grip|rotate"
+JOINT_WORDS = {"shoulder", "wrist", "wrist_rotation", "grip", "rotate"}
+JOINT_PATTERN = r"shoulder|wrist rotation|wrist rotate|wrist_rotation|wrist_rotate|wrist|grip|rotate"
 LLM_ACTIONS = {
     "help",
+    "detect",
     "state",
     "home",
     "stop",
     "pickup",
+    "pickup_1",
+    "pickup_2",
     "place",
+    "place_1",
+    "place_2",
     "auto_blue_on",
     "auto_blue_off",
     "auto_blue_status",
@@ -56,6 +63,15 @@ class NaturalLanguageAction:
     action: str
     args: tuple[str | int, ...] = ()
     description: str = ""
+
+
+@dataclass(frozen=True)
+class NaturalLanguagePlan:
+    actions: tuple[NaturalLanguageAction, ...]
+
+    @property
+    def description(self) -> str:
+        return " -> ".join(action.description or action.action for action in self.actions)
 
 
 def load_env_file(path: str = ".env") -> None:
@@ -90,6 +106,7 @@ class Config:
     allowed_chat_id: int
     serial_port: str
     baudrate: int
+    detect_url: str
 
     @staticmethod
     def from_env() -> "Config":
@@ -106,12 +123,14 @@ class Config:
             raise ValueError("ROBOT_ARM_SERIAL_PORT is missing")
 
         baudrate = int(os.environ.get("ROBOT_ARM_BAUDRATE", "115200"))
+        detect_url = os.environ.get("ROBOT_ARM_DETECT_URL", "http://127.0.0.1:8080/detect").strip()
 
         return Config(
             telegram_bot_token=token,
             allowed_chat_id=int(chat_id_raw),
             serial_port=serial_port,
             baudrate=baudrate,
+            detect_url=detect_url,
         )
 
 
@@ -129,6 +148,33 @@ class PrimitiveRobotController:
         payload = self.client.get_state()
         return json.dumps(payload, indent=2, sort_keys=True)
 
+    def detect_text(self, detect_url: str) -> str:
+        request = urllib.request.Request(detect_url, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=30) as response:
+                payload = json.loads(response.read().decode("utf-8"))
+        except urllib.error.URLError as exc:
+            raise RuntimeError(
+                "Detection server is not reachable. Start the stream server with --model first."
+            ) from exc
+
+        if not payload.get("ok"):
+            error = payload.get("error")
+            if error:
+                return f"No detection: {error}"
+            return "No object detected."
+
+        best = payload.get("best") or {}
+        label = best.get("label", "object")
+        confidence = float(best.get("confidence", 0.0))
+        center = best.get("center", ["?", "?"])
+        box = best.get("box", ["?", "?", "?", "?"])
+        return (
+            f"Detected {label} ({confidence * 100:.1f}%)\n"
+            f"center: ({center[0]}, {center[1]})\n"
+            f"box: ({box[0]}, {box[1]}, {box[2]}, {box[3]})"
+        )
+
     def home(self) -> str:
         return self.client.home()
 
@@ -138,8 +184,20 @@ class PrimitiveRobotController:
     def pickup(self) -> str:
         return self.client.pickup()
 
+    def pickup_1(self) -> str:
+        return self.client.pickup_1()
+
+    def pickup_2(self) -> str:
+        return self.client.pickup_2()
+
     def place(self) -> str:
         return self.client.place()
+
+    def place_1(self) -> str:
+        return self.client.place_1()
+
+    def place_2(self) -> str:
+        return self.client.place_2()
 
     def auto_blue_on(self) -> str:
         return self.client.auto_blue_on()
@@ -171,14 +229,13 @@ class PrimitiveRobotController:
         y: float,
         z: float,
         wrist_pitch: float = 0.0,
-        elbow_up: bool = False,
     ) -> str:
         solution = solve_inverse_kinematics(
             x,
             y,
             z,
             wrist_pitch_deg=wrist_pitch,
-            elbow_up=elbow_up,
+            elbow_up=False,
         )
         servo_angles = solution.servo_angles(DEFAULT_SERVO_CALIBRATION)
         ok, reason = within_joint_limits(servo_angles)
@@ -188,13 +245,17 @@ class PrimitiveRobotController:
         replies = {
             "rotate": self.client.move("rotate", servo_angles["rotate"]),
             "shoulder": self.client.move("shoulder", servo_angles["shoulder"]),
-            "elbow": self.client.move("elbow", servo_angles["elbow"]),
             "wrist": self.client.move("wrist", servo_angles["wrist"]),
         }
         return json.dumps(
             {
                 "target_mm": {"x": x, "y": y, "z": z},
-                "servo_angles": servo_angles,
+                "servo_angles": {
+                    joint: angle
+                    for joint, angle in servo_angles.items()
+                    if joint != "elbow"
+                },
+                "note": "Elbow servo is disabled/removed; move_to sends rotate, shoulder, and wrist only.",
                 "reply": replies,
             },
             indent=2,
@@ -232,6 +293,7 @@ def normalize_text(text: str) -> str:
     normalized = text.strip().lower()
     normalized = re.sub(r"_+", " ", normalized)
     normalized = re.sub(r"\s+", " ", normalized)
+    normalized = re.sub(r"^(?:please|do|can you|could you|would you)\s+", "", normalized)
     return normalized
 
 
@@ -242,11 +304,13 @@ def normalize_joint(raw: str) -> str:
     return joint
 
 
-def parse_natural_language(text: str) -> NaturalLanguageAction | None:
+def parse_single_natural_language(text: str) -> NaturalLanguageAction | None:
     text = normalize_text(text)
 
     if text in {"help", "commands", "what can you do"}:
         return NaturalLanguageAction("help", description="show help")
+    if text in {"detect", "detection", "find object", "find cat"}:
+        return NaturalLanguageAction("detect", description="detect object")
     if text in {"state", "status"}:
         return NaturalLanguageAction("state", description="read state")
 
@@ -293,6 +357,14 @@ def parse_natural_language(text: str) -> NaturalLanguageAction | None:
         return NaturalLanguageAction("home", description="go home")
     if any(phrase in text for phrase in ("stop", "emergency")):
         return NaturalLanguageAction("stop", description="stop")
+    if any(phrase in text for phrase in ("pick up 1", "pickup 1", "pick up one", "pickup one")):
+        return NaturalLanguageAction("pickup_1", description="pickup_1")
+    if any(phrase in text for phrase in ("pick up 2", "pickup 2", "pick up two", "pickup two")):
+        return NaturalLanguageAction("pickup_2", description="pickup_2")
+    if any(phrase in text for phrase in ("place 1", "drop 1", "release 1", "place one")):
+        return NaturalLanguageAction("place_1", description="place_1")
+    if any(phrase in text for phrase in ("place 2", "drop 2", "release 2", "place two")):
+        return NaturalLanguageAction("place_2", description="place_2")
     if any(phrase in text for phrase in ("pick up", "pickup", "grab")):
         return NaturalLanguageAction("pickup", description="pickup")
     if any(phrase in text for phrase in ("place", "drop", "release")):
@@ -333,6 +405,32 @@ def parse_natural_language(text: str) -> NaturalLanguageAction | None:
     return None
 
 
+def parse_natural_language(text: str) -> NaturalLanguagePlan | None:
+    normalized = normalize_text(text)
+    single_action = parse_single_natural_language(normalized)
+
+    split_candidates = re.split(
+        r"\s*(?:,|;|\band then\b|\bthen\b|\bafter that\b|\bnext\b|\band\b)\s*",
+        normalized,
+    )
+    split_candidates = [part.strip() for part in split_candidates if part.strip()]
+
+    if len(split_candidates) > 1:
+        actions: list[NaturalLanguageAction] = []
+        for part in split_candidates:
+            parsed = parse_single_natural_language(part)
+            if parsed is None:
+                actions = []
+                break
+            actions.append(parsed)
+        if actions:
+            return NaturalLanguagePlan(tuple(actions))
+
+    if single_action is None:
+        return None
+    return NaturalLanguagePlan((single_action,))
+
+
 def build_openclaw_prompt(text: str) -> str:
     primitives = ", ".join(list_primitives())
     return (
@@ -340,11 +438,16 @@ def build_openclaw_prompt(text: str) -> str:
         "Return ONLY one JSON object. Do not include Markdown or explanation.\n\n"
         "Allowed JSON forms:\n"
         '{"action":"help"}\n'
+        '{"action":"detect"}\n'
         '{"action":"state"}\n'
         '{"action":"home"}\n'
         '{"action":"stop"}\n'
         '{"action":"pickup"}\n'
+        '{"action":"pickup_1"}\n'
+        '{"action":"pickup_2"}\n'
         '{"action":"place"}\n'
+        '{"action":"place_1"}\n'
+        '{"action":"place_2"}\n'
         '{"action":"auto_blue_on"}\n'
         '{"action":"auto_blue_off"}\n'
         '{"action":"auto_blue_status"}\n'
@@ -356,12 +459,16 @@ def build_openclaw_prompt(text: str) -> str:
         '{"action":"run","name":"ready"}\n'
         '{"action":"move","joint":"shoulder","angle":95}\n'
         '{"action":"move","joint":"wrist_rotation","angle":95}\n'
-        '{"action":"step","joint":"elbow","delta":-4}\n\n'
-        "Allowed joints: shoulder, elbow, wrist, wrist_rotation, grip, rotate.\n"
+        '{"action":"step","joint":"wrist","delta":-4}\n\n'
+        "Allowed joints: shoulder, wrist, wrist_rotation, grip, rotate. Elbow is not available.\n"
         f"Allowed primitives: {primitives}.\n"
+        "Choose exactly one action for each user message.\n"
         "For commands like 'pick up the blue object', use pick_object with color blue.\n"
         "For commands like 'move the blue object to the red flag', use move_object_to.\n"
+        "If the user asks for multiple actions in one sentence, such as 'pick up and place', "
+        'return {"action":"help"} instead of guessing one step.\n'
         "Use move_to only when the user gives explicit x/y/z millimeter coordinates.\n"
+        "Use detect when the user asks to run object detection once.\n"
         "Prefer high-level safe actions like home, pickup, place, pick_object, blue_nod_on, auto_blue_on, or run.\n"
         "Use move/step only when the user explicitly gives a joint and numeric value.\n"
         "If the command is unsafe or unclear, return {\"action\":\"help\"}.\n\n"
@@ -412,10 +519,9 @@ def action_from_payload(payload: dict) -> NaturalLanguageAction:
         y = float(payload["y"])
         z = float(payload["z"])
         wrist_pitch = float(payload.get("wrist_pitch", 0.0))
-        elbow_up = bool(payload.get("elbow_up", False))
         return NaturalLanguageAction(
             "move_to",
-            (x, y, z, wrist_pitch, elbow_up),
+            (x, y, z, wrist_pitch),
             f"OpenClaw chose move_to x={x} y={y} z={z}",
         )
 
@@ -443,11 +549,16 @@ def action_from_payload(payload: dict) -> NaturalLanguageAction:
 
     descriptions = {
         "help": "OpenClaw chose help",
+        "detect": "OpenClaw chose detect",
         "state": "OpenClaw chose state",
         "home": "OpenClaw chose home",
         "stop": "OpenClaw chose stop",
         "pickup": "OpenClaw chose pickup",
+        "pickup_1": "OpenClaw chose pickup_1",
+        "pickup_2": "OpenClaw chose pickup_2",
         "place": "OpenClaw chose place",
+        "place_1": "OpenClaw chose place_1",
+        "place_2": "OpenClaw chose place_2",
         "auto_blue_on": "OpenClaw chose auto blue on",
         "auto_blue_off": "OpenClaw chose auto blue off",
         "auto_blue_status": "OpenClaw chose auto blue status",
@@ -460,7 +571,7 @@ def action_from_payload(payload: dict) -> NaturalLanguageAction:
     return NaturalLanguageAction(action, description=descriptions[action])
 
 
-def interpret_with_openclaw(text: str) -> NaturalLanguageAction:
+def interpret_with_openclaw(text: str) -> NaturalLanguagePlan:
     command = os.environ.get("OPENCLAW_INTENT_COMMAND", "").strip()
     if not command:
         raise ValueError("OPENCLAW_INTENT_COMMAND is not set")
@@ -478,10 +589,10 @@ def interpret_with_openclaw(text: str) -> NaturalLanguageAction:
         stderr = completed.stderr.strip()
         raise ValueError(f"OpenClaw intent command failed: {stderr or completed.returncode}")
 
-    return action_from_payload(extract_json_object(completed.stdout))
+    return NaturalLanguagePlan((action_from_payload(extract_json_object(completed.stdout)),))
 
 
-def interpret_natural_language(text: str) -> NaturalLanguageAction | None:
+def interpret_natural_language(text: str) -> NaturalLanguagePlan | None:
     mode = os.environ.get("ROBOT_ARM_NL_INTERPRETER", "rules").strip().lower()
     rule_action = parse_natural_language(text)
     if rule_action is not None:
@@ -499,9 +610,12 @@ def interpret_natural_language(text: str) -> NaturalLanguageAction | None:
 async def execute_natural_language_action(
     action: NaturalLanguageAction,
     controller: PrimitiveRobotController,
+    detect_url: str,
 ) -> str:
     if action.action == "help":
         return help_text()
+    if action.action == "detect":
+        return await asyncio.to_thread(controller.detect_text, detect_url)
     if action.action == "state":
         return await asyncio.to_thread(controller.state_text)
     if action.action == "home":
@@ -510,8 +624,16 @@ async def execute_natural_language_action(
         return await asyncio.to_thread(controller.stop)
     if action.action == "pickup":
         return await asyncio.to_thread(controller.pickup)
+    if action.action == "pickup_1":
+        return await asyncio.to_thread(controller.pickup_1)
+    if action.action == "pickup_2":
+        return await asyncio.to_thread(controller.pickup_2)
     if action.action == "place":
         return await asyncio.to_thread(controller.place)
+    if action.action == "place_1":
+        return await asyncio.to_thread(controller.place_1)
+    if action.action == "place_2":
+        return await asyncio.to_thread(controller.place_2)
     if action.action == "auto_blue_on":
         return await asyncio.to_thread(controller.auto_blue_on)
     if action.action == "auto_blue_off":
@@ -543,7 +665,6 @@ async def execute_natural_language_action(
             float(action.args[1]),
             float(action.args[2]),
             float(action.args[3]),
-            bool(action.args[4]),
         )
     if action.action == "pick_object":
         return await asyncio.to_thread(controller.pick_object, str(action.args[0]))
@@ -557,16 +678,33 @@ async def execute_natural_language_action(
     raise ValueError(f"Unsupported natural-language action: {action.action}")
 
 
+async def execute_natural_language_plan(
+    plan: NaturalLanguagePlan,
+    controller: PrimitiveRobotController,
+    detect_url: str,
+) -> str:
+    results: list[str] = []
+    for action in plan.actions:
+        result = await execute_natural_language_action(action, controller, detect_url)
+        results.append(f"{action.description or action.action}: {result}")
+    return "\n".join(results)
+
+
 def help_text() -> str:
     return (
         "Robot arm primitive bot\n\n"
         "Slash commands:\n"
+        "/detect\n"
         "/list\n"
         "/state\n"
         "/home\n"
         "/stop\n"
         "/pickup\n"
+        "/run pickup_1\n"
+        "/run pickup_2\n"
         "/place\n"
+        "/run place_1\n"
+        "/run place_2\n"
         "/auto_blue_on\n"
         "/auto_blue_off\n"
         "/auto_blue_status\n"
@@ -578,9 +716,15 @@ def help_text() -> str:
         "/step <joint> <delta>\n"
         "/spin rotate <speed>\n\n"
         "Natural language examples:\n"
+        "detect\n"
         "go home\n"
         "pick up\n"
+        "pick up 1\n"
+        "pick up 2\n"
         "place it\n"
+        "place 1\n"
+        "place 2\n"
+        "pick up 1 and place 2\n"
         "find blue and nod\n"
         "stop blue nod\n"
         "auto pick blue\n"
@@ -589,7 +733,7 @@ def help_text() -> str:
         "move to x 530 y 0 z 240\n"
         "move shoulder to 95\n"
         "move wrist rotation to 95\n"
-        "step elbow -4"
+        "step wrist -4"
     )
 
 
@@ -640,6 +784,20 @@ async def state_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not is_authorized(update, cfg.allowed_chat_id):
         return
     text = await asyncio.to_thread(controller.state_text)
+    await reply_if_authorized(update, context, text)
+
+
+async def detect_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    cfg: Config = context.bot_data["config"]
+    controller: PrimitiveRobotController = context.bot_data["controller"]
+    if not is_authorized(update, cfg.allowed_chat_id):
+        return
+    await acknowledge_if_authorized(update, context)
+    try:
+        text = await asyncio.to_thread(controller.detect_text, cfg.detect_url)
+    except Exception as exc:
+        await reply_if_authorized(update, context, f"Error: {exc}")
+        return
     await reply_if_authorized(update, context, text)
 
 
@@ -817,7 +975,7 @@ async def move_to_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         y = float(context.args[1].strip())
         z = float(context.args[2].strip())
         wrist_pitch = float(context.args[3].strip()) if len(context.args) == 4 else 0.0
-        text = await asyncio.to_thread(controller.move_to_xyz, x, y, z, wrist_pitch, False)
+        text = await asyncio.to_thread(controller.move_to_xyz, x, y, z, wrist_pitch)
     except Exception as exc:
         await reply_if_authorized(update, context, f"Error: {exc}")
         return
@@ -837,8 +995,8 @@ async def natural_language_handler(update: Update, context: ContextTypes.DEFAULT
     if fast_ack_enabled():
         await message.reply_text("Received. Processing...")
 
-    action = interpret_natural_language(message.text)
-    if action is None:
+    plan = interpret_natural_language(message.text)
+    if plan is None:
         await message.reply_text(
             "I did not understand that. Try: 'go home', 'pick up', "
             "'find blue and nod', 'auto pick blue', or /start."
@@ -846,12 +1004,12 @@ async def natural_language_handler(update: Update, context: ContextTypes.DEFAULT
         return
 
     try:
-        result = await execute_natural_language_action(action, controller)
+        result = await execute_natural_language_plan(plan, controller, cfg.detect_url)
     except Exception as exc:
         await message.reply_text(f"Error: {exc}")
         return
 
-    await message.reply_text(f"{action.description}: {result}")
+    await message.reply_text(result)
 
 
 async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -878,6 +1036,7 @@ def main() -> None:
     app.bot_data["controller"] = controller
 
     app.add_handler(CommandHandler("start", start_handler))
+    app.add_handler(CommandHandler("detect", detect_handler))
     app.add_handler(CommandHandler("list", list_handler))
     app.add_handler(CommandHandler("state", state_handler))
     app.add_handler(CommandHandler("home", home_handler))

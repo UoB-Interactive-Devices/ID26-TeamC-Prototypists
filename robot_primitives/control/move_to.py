@@ -27,11 +27,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Desired gripper pitch in degrees within the radial plane",
     )
     parser.add_argument(
-        "--elbow-up",
-        action="store_true",
-        help="Use the alternate IK branch",
-    )
-    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Only print the solved servo angles without sending them",
@@ -49,7 +44,7 @@ def main() -> int:
             args.y,
             args.z,
             wrist_pitch_deg=args.wrist_pitch,
-            elbow_up=args.elbow_up,
+            elbow_up=False,
         )
         servo_angles = solution.servo_angles(DEFAULT_SERVO_CALIBRATION)
         ok, reason = within_joint_limits(servo_angles)
@@ -65,10 +60,14 @@ def main() -> int:
         "ik_degrees": {
             "rotate": round(solution.rotate, 2),
             "shoulder": round(solution.shoulder, 2),
-            "elbow": round(solution.elbow, 2),
             "wrist": round(solution.wrist, 2),
         },
-        "servo_angles": servo_angles,
+        "servo_angles": {
+            joint: angle
+            for joint, angle in servo_angles.items()
+            if joint != "elbow"
+        },
+        "note": "Elbow servo is disabled/removed; move_to sends rotate, shoulder, and wrist only.",
     }
 
     if args.dry_run:
@@ -81,7 +80,6 @@ def main() -> int:
         payload["reply"] = {
             "rotate": client.move("rotate", servo_angles["rotate"]),
             "shoulder": client.move("shoulder", servo_angles["shoulder"]),
-            "elbow": client.move("elbow", servo_angles["elbow"]),
             "wrist": client.move("wrist", servo_angles["wrist"]),
         }
     finally:

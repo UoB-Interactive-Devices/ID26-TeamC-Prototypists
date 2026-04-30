@@ -58,6 +58,7 @@ HCPCA9685 HCPCA9685(I2CAdd);
 
 void setup() 
 {
+  Serial.begin(9600);
   /* Initialise the library and set it to 'servo mode' */ 
   HCPCA9685.Init(SERVO_MODE);
 
@@ -68,25 +69,31 @@ void setup()
 
 void loop() 
 {
-  unsigned int Pos;
+  int Pos;
 
   /* Sweep the servo back and forth from its minimum to maximum position.
      If your servo is hitting its end stops then you  should adjust the 
      values so that the servo can sweep though its full range without hitting
      the end stops. You can adjust the min & max positions by altering 
      the trim values in the libraries HCPCA9685.h file*/
-  for(Pos = 10; Pos < 450; Pos++)
+  for(Pos = 0; Pos < 180; Pos++)
   {
     /* This function sets the servos position. It takes two parameters, 
      * the first is the servo to control, and the second is the servo 
      * position. */
-    HCPCA9685.Servo(13, Pos);
-    delay(10);
+    HCPCA9685.Servo(1,Pos);
+    Serial.print("UP ");
+    Serial.println(Pos);
+
+    delay(50);
   }
   
-  for(Pos = 450; Pos >= 10; Pos--)
+  for(Pos = 180; Pos >= 0; Pos--)
   {
-    HCPCA9685.Servo(13, Pos);
-    delay(10);
+    HCPCA9685.Servo(1, Pos);
+    Serial.print("DWN ");
+    Serial.println(Pos);
+
+    delay(50);
   }
 }
